@@ -3,6 +3,7 @@
     "name": "Waisify",
     "slug": "waisify-app-movil",
     "version": "1.0.0",
+    "owner": "eloy_pv",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "ios": {
@@ -21,6 +22,12 @@
     "plugins": [
       "expo-router"
     ],
-    "scheme": "waisify"
+    "scheme": "waisify",
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "e2c08d8b-c378-48b8-b3ba-33401615e5c5"
+      }
+    }
   }
 }
