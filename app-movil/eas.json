@@ -17,9 +17,11 @@
   },
   "submit": {
     "production": {
-      "appleId": "eloy.user@waisify.app",
-      "ascAppId": "6500000000",
-      "appleTeamId": "AB12CD34EF"
+      "ios": {
+        "appleId": "eloy.user@waisify.app",
+        "ascAppId": "6500000000",
+        "appleTeamId": "AB12CD34EF"
+      }
     }
   }
 }
