@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+app-movil/node_modules/
+backend-server/node_modules/
+
+# Local env files
+.env
+.env.local
+.env.*.local
+
+# Expo directories
+app-movil/.expo/
+app-movil/.eas/
+app-movil/dist/
+
+# Electron and web builds
+dist/
+dist-electron/
+out/
+
+# IDE / System
+.vscode/
+.idea/
+.DS_Store
+*.log
+.gemini/

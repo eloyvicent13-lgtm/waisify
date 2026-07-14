@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Waisify - Spotify Clone</title>
+  <link rel="stylesheet" href="/src/styles.css">
+</head>
+<body>
+  <!-- Custom Frameless Titlebar -->
+  <div id="titlebar">
+    <div class="drag-region">
+      <div class="app-logo">
+        <svg viewBox="0 0 24 24" class="logo-icon">
+          <path fill="currentColor" d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2zm4.586 14.424c-.18.295-.565.387-.86.207-2.377-1.454-5.37-1.783-8.894-.982-.336.076-.67-.135-.746-.472-.076-.336.135-.67.472-.746 3.847-.878 7.144-.495 9.822 1.144.295.18.387.565.206.86zm1.225-2.72c-.226.367-.707.487-1.074.26-2.72-1.672-6.87-2.157-10.076-1.182-.413.125-.848-.108-.973-.52-.125-.413.108-.847.52-.973 3.67-1.114 8.24-.57 11.343 1.34.367.227.487.707.26 1.074zm.106-2.833C14.384 8.8 8.44 8.604 5.004 9.648c-.53.16-1.09-.14-1.25-.67-.16-.53.14-1.09.67-1.25 3.96-1.202 10.53-.974 14.6 1.44.477.283.63.9.347 1.377-.283.477-.9.63-1.377.347z"/>
+        </svg>
+        Waisify
+      </div>
+    </div>
+    <div class="window-controls">
+      <button id="min-btn" title="Minimizar">&#128469;&#xFE0E;</button>
+      <button id="max-btn" title="Maximizar">&#128470;&#xFE0E;</button>
+      <button id="close-btn" title="Cerrar">&#128473;&#xFE0E;</button>
+    </div>
+  </div>
+
+  <div id="main-container">
+    
+    <!-- Auth Interface (Login & Register Overlay) -->
+    <div id="auth-overlay" class="auth-container">
+      <div class="auth-card">
+        <h2 id="auth-title">Iniciar Sesión en Waisify</h2>
+        <p class="auth-subtitle">Sincroniza tus playlists y reproduce música con calidad premium.</p>
+        
+        <div id="auth-error-msg" class="error-box hidden"></div>
+        
+        <form id="auth-form">
+          <div class="form-group">
+            <label for="auth-username">Nombre de usuario</label>
+            <input type="text" id="auth-username" required placeholder="Ingresa tu usuario">
+          </div>
+          <div class="form-group">
+            <label for="auth-password">Contraseña</label>
+            <input type="password" id="auth-password" required placeholder="Ingresa tu contraseña">
+          </div>
+          <button type="submit" id="auth-submit-btn" class="btn-primary">Entrar</button>
+        </form>
+        
+        <div class="auth-switch">
+          <span id="auth-switch-text">¿No tienes cuenta?</span>
+          <a href="#" id="auth-switch-link">Regístrate gratis</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- App Main Layout (Hidden until logged in) -->
+    <div id="app-layout" class="hidden">
+      
+      <!-- Sidebar Navigation -->
+      <aside id="sidebar">
+        <nav class="sidebar-nav">
+          <a href="#" id="nav-home-link" class="nav-item active">
+            <svg viewBox="0 0 24 24" class="nav-icon"><path fill="currentColor" d="M10,20V14H14V20H19V12H22L12,3L2,12H5V20H10Z"/></svg>
+            Inicio
+          </a>
+          <a href="#" id="nav-search-link" class="nav-item">
+            <svg viewBox="0 0 24 24" class="nav-icon"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+            Buscar
+          </a>
+          <a href="#" id="nav-playlists-link" class="nav-item">
+            <svg viewBox="0 0 24 24" class="nav-icon"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2zm2.07-7.75l-.9.92C13.45 12.9 13 13.5 13 15h-2v-.5c0-1.1.45-2.1 1.17-2.83l1.24-1.26c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2s-2 .9-2 2H7c0-2.76 2.24-5 5-5s5 2.24 5 5c0 1.04-.42 1.99-1.07 2.75z"/></svg>
+            Biblioteca
+          </a>
+          <a href="#" id="nav-settings-link" class="nav-item">
+            <svg viewBox="0 0 24 24" class="nav-icon"><path fill="currentColor" d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+            Ajustes
+          </a>
+        </nav>
+        
+        <div class="sidebar-playlists-section">
+          <div class="section-header">
+            <h3>Tus Listas</h3>
+            <button id="create-playlist-btn" title="Crear Lista">+</button>
+          </div>
+          <div id="sidebar-playlists" class="playlists-list">
+            <!-- Dynamic user playlists -->
+          </div>
+          <button id="import-playlist-btn" class="btn-spotify-outline" style="width: 100%; margin-top: 12px; font-size: 11px; display: flex; align-items: center; justify-content: center; gap: 6px; padding: 8px; border-radius: 20px;">
+            <svg viewBox="0 0 24 24" style="width: 14px; height: 14px; fill: currentColor;"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z"/></svg>
+            <span>Importar Playlist</span>
+          </button>
+        </div>
+
+
+      </aside>
+
+      <!-- Central Viewport -->
+      <main id="content-area">
+        
+        <!-- Sticky Top Navigation Header -->
+        <header id="top-nav-bar">
+          <div class="nav-left">
+            <button class="nav-arrow-btn" id="nav-back" title="Atrás">&lsaquo;</button>
+            <button class="nav-arrow-btn" id="nav-forward" title="Adelante">&rsaquo;</button>
+            <div class="top-search-container">
+              <svg viewBox="0 0 24 24" class="search-icon"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+              <input type="text" id="global-search-input" placeholder="¿Qué quieres reproducir?">
+            </div>
+          </div>
+          <div class="nav-right">
+            <div class="profile-badge">
+              <div class="profile-avatar" id="avatar-letter">U</div>
+              <span id="nav-username">Usuario</span>
+            </div>
+            <button id="nav-logout-btn" class="nav-logout-btn" title="Cerrar Sesión">
+              <svg viewBox="0 0 24 24" class="logout-icon"><path fill="currentColor" d="M17 17.24V14h-7v-4h7V6.76L22.24 12 17 17.24M11 2H5c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h6v-2H5V4h6V2z"/></svg>
+            </button>
+          </div>
+        </header>
+
+        <!-- Scrollable Views Container -->
+        <div id="views-container">
+          
+          <!-- Home Screen -->
+          <section id="home-view" class="view-panel">
+            <div class="category-pills">
+              <button class="pill active">Todo</button>
+              <button class="pill">Música</button>
+              <button class="pill">Pódcasts</button>
+              <button class="pill">Audiolibros</button>
+            </div>
+
+            <!-- Featured Album Hero Banner -->
+            <div id="home-hero-banner" class="home-hero-banner">
+              <div class="hero-left">
+                <span class="hero-badge">RECOMENDADO</span>
+                <h1 class="hero-title">The Secret of Us</h1>
+                <p class="hero-artist">Gracie Abrams &bull; Escúchalo ahora</p>
+                <div class="hero-buttons">
+                  <button id="hero-play-btn" class="btn-spotify-play">Escuchar ahora</button>
+                  <button id="hero-save-btn" class="btn-spotify-outline">Guardar</button>
+                </div>
+              </div>
+              <div class="hero-right">
+                <img src="https://images.unsplash.com/photo-1501386761578-eac5c94b800a?q=80&w=800&auto=format&fit=crop" class="hero-img" alt="Featured Album Cover">
+              </div>
+            </div>
+
+            <!-- Parrilla de Accesos Rápidos (Buenas tardes) -->
+            <div class="home-section">
+              <h2 class="home-section-title">Buenas tardes</h2>
+              <div id="home-shortcuts-grid" class="shortcuts-grid">
+                <div class="shortcut-card" data-query="David Guetta Live Ushuaia Ibiza 2026">
+                  <img src="https://images.unsplash.com/photo-1470225620780-dba8ba36b745?q=80&w=150&auto=format&fit=crop" alt="Guetta">
+                  <span class="shortcut-title">David Guetta Live Ushuaia, Ibiza 2026</span>
+                  <button class="shortcut-play-btn" title="Reproducir">
+                    <svg viewBox="0 0 24 24"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
+                  </button>
+                </div>
+                <div class="shortcut-card" data-query="David Guetta Dance Party">
+                  <img src="https://images.unsplash.com/photo-1487180142328-0c4e37023af5?q=80&w=150&auto=format&fit=crop" alt="Dance">
+                  <span class="shortcut-title">DAVID GUETTA 2026 🔥 DANCE PARTY</span>
+                  <button class="shortcut-play-btn" title="Reproducir">
+                    <svg viewBox="0 0 24 24"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
+                  </button>
+                </div>
+                <div class="shortcut-card" data-query="Martin Garrix Hits Best Of">
+                  <img src="https://images.unsplash.com/photo-1514525253161-7a46d19cd819?q=80&w=150&auto=format&fit=crop" alt="Garrix">
+                  <span class="shortcut-title">MARTIN GARRIX HITS 🎧 BEST OF</span>
+                  <button class="shortcut-play-btn" title="Reproducir">
+                    <svg viewBox="0 0 24 24"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
+                  </button>
+                </div>
+                <div class="shortcut-card" data-query="Brazilian Phonk">
+                  <img src="https://images.unsplash.com/photo-1508700115892-45ecd05ae2ad?q=80&w=150&auto=format&fit=crop" alt="Phonk">
+                  <span class="shortcut-title">BRAZILIAN PHONK BR</span>
+                  <button class="shortcut-play-btn" title="Reproducir">
+                    <svg viewBox="0 0 24 24"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
+                  </button>
+                </div>
+                <div class="shortcut-card" data-query="phonk">
+                  <img src="https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?q=80&w=150&auto=format&fit=crop" alt="Phonk">
+                  <span class="shortcut-title">phonk</span>
+                  <button class="shortcut-play-btn" title="Reproducir">
+                    <svg viewBox="0 0 24 24"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
+                  </button>
+                </div>
+                <div class="shortcut-card" data-query="Pop con N">
+                  <img src="https://images.unsplash.com/photo-1459749411175-04bf5292ceea?q=80&w=150&auto=format&fit=crop" alt="Pop">
+                  <span class="shortcut-title">Pop con Ñ</span>
+                  <button class="shortcut-play-btn" title="Reproducir">
+                    <svg viewBox="0 0 24 24"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
+                  </button>
+                </div>
+                <div class="shortcut-card" data-query="LRNVAC">
+                  <img src="https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?q=80&w=150&auto=format&fit=crop" alt="LRNVAC">
+                  <span class="shortcut-title">LRNVAC</span>
+                  <button class="shortcut-play-btn" title="Reproducir">
+                    <svg viewBox="0 0 24 24"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
+                  </button>
+                </div>
+                <div class="shortcut-card" data-query="Mix diario 2">
+                  <img src="https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?q=80&w=150&auto=format&fit=crop" alt="Mix">
+                  <span class="shortcut-title">Mix diario 2</span>
+                  <button class="shortcut-play-btn" title="Reproducir">
+                    <svg viewBox="0 0 24 24"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Fila Partida: Promo y Emisoras -->
+            <div class="home-split-row">
+              <div class="home-split-left">
+                <h2 class="home-section-title">Cómo empezar</h2>
+                <div class="promo-card">
+                  <h3 class="promo-title">Prueba el Minirreproductor...</h3>
+                  <p class="promo-desc">Controla tu música y mira videos de YouTube sin anuncios ni interrupciones.</p>
+                  <div class="promo-footer">
+                    <span class="promo-brand">Waisify Premium</span>
+                  </div>
+                </div>
+              </div>
+              <div class="home-split-right">
+                <h2 class="home-section-title">Emisoras recomendadas</h2>
+                <div id="home-artists-carousel" class="artists-carousel">
+                  <div class="artist-circle-card" data-artist="Shakira">
+                    <div class="avatar-wrap">
+                      <img src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?q=80&w=200&auto=format&fit=crop" alt="Shakira">
+                      <button class="carousel-play-btn" title="Reproducir">
+                        <svg viewBox="0 0 24 24"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
+                      </button>
+                    </div>
+                    <span class="artist-card-name">Shakira Radio</span>
+                  </div>
+                  <div class="artist-circle-card" data-artist="Milo J">
+                    <div class="avatar-wrap">
+                      <img src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?q=80&w=200&auto=format&fit=crop" alt="Milo J">
+                      <button class="carousel-play-btn" title="Reproducir">
+                        <svg viewBox="0 0 24 24"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
+                      </button>
+                    </div>
+                    <span class="artist-card-name">Milo J Radio</span>
+                  </div>
+                  <div class="artist-circle-card" data-artist="Trueno">
+                    <div class="avatar-wrap">
+                      <img src="https://images.unsplash.com/photo-1500648767791-00dcc994a43e?q=80&w=200&auto=format&fit=crop" alt="Trueno">
+                      <button class="carousel-play-btn" title="Reproducir">
+                        <svg viewBox="0 0 24 24"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
+                      </button>
+                    </div>
+                    <span class="artist-card-name">Trueno Radio</span>
+                  </div>
+                  <div class="artist-circle-card" data-artist="Bizarrap">
+                    <div class="avatar-wrap">
+                      <img src="https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?q=80&w=200&auto=format&fit=crop" alt="Bizarrap">
+                      <button class="carousel-play-btn" title="Reproducir">
+                        <svg viewBox="0 0 24 24"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
+                      </button>
+                    </div>
+                    <span class="artist-card-name">Bizarrap Radio</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- Search Screen -->
+          <section id="search-view" class="view-panel hidden">
+            <div class="results-container">
+              <h2 id="search-heading">Resultados de búsqueda</h2>
+              <div id="search-results" class="tracks-list">
+                <p class="empty-state">Escribe en el buscador superior para comenzar.</p>
+              </div>
+            </div>
+          </section>
+
+          <!-- Playlist Details Screen -->
+          <section id="playlist-view" class="view-panel hidden">
+            <div class="playlist-header">
+              <div class="playlist-cover-placeholder">
+                <svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2zm2.07-7.75l-.9.92C13.45 12.9 13 13.5 13 15h-2v-.5c0-1.1.45-2.1 1.17-2.83l1.24-1.26c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2s-2 .9-2 2H7c0-2.76 2.24-5 5-5s5 2.24 5 5c0 1.04-.42 1.99-1.07 2.75z"/></svg>
+              </div>
+              <div class="playlist-header-info">
+                <span class="playlist-badge">LISTA DE REPRODUCCIÓN</span>
+                <h1 id="playlist-title">Mi Playlist</h1>
+                <div class="playlist-meta">
+                  <span id="playlist-author">Usuario</span> &bull; <span id="playlist-track-count">0 canciones</span>
+                </div>
+                <button id="delete-playlist-btn" class="btn-danger">Eliminar Lista</button>
+              </div>
+            </div>
+            
+            <!-- Playlist Premium Action Control Bar -->
+            <div class="playlist-action-bar">
+              <button id="playlist-play-btn" class="playlist-play-btn-circle" title="Reproducir">
+                <svg viewBox="0 0 24 24"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
+              </button>
+              <button id="playlist-shuffle-btn" class="action-bar-icon-btn" title="Mezclar">
+                <svg viewBox="0 0 24 24"><path fill="currentColor" d="M10.59,9.17L5.41,4L4,5.41L9.17,10.59L10.59,9.17ZM14.5,4l2.04,2.04L4,18.59L5.41,20L17.96,7.46L20,9.5V4H14.5ZM14.83,13.41L13.41,14.83L16.59,18L14.5,20.09V20.1L20,20.1V14.5L17.96,16.54L14.83,13.41Z"/></svg>
+              </button>
+              <button id="playlist-like-btn" class="action-bar-icon-btn" title="Guardar en tu biblioteca">
+                <svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+              </button>
+              <button id="playlist-download-btn" class="action-bar-icon-btn" title="Descargar">
+                <svg viewBox="0 0 24 24"><path fill="currentColor" d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z"/></svg>
+              </button>
+              <button id="playlist-menu-btn" class="action-bar-icon-btn" title="Más opciones">
+                <svg viewBox="0 0 24 24"><path fill="currentColor" d="M12,16A2,2 0 0,1 14,18A2,2 0 0,1 12,20A2,2 0 0,1 10,18A2,2 0 0,1 12,16M12,10A2,2 0 0,1 14,12A2,2 0 0,1 12,14A2,2 0 0,1 10,12A2,2 0 0,1 12,10M12,4A2,2 0 0,1 14,6A2,2 0 0,1 12,8A2,2 0 0,1 10,6A2,2 0 0,1 12,4Z"/></svg>
+              </button>
+            </div>
+
+            <div class="playlist-content">
+              <div id="playlist-tracks" class="tracks-list">
+                <p class="empty-state">No hay canciones en esta lista.</p>
+              </div>
+            </div>
+          </section>
+
+          <!-- Settings View Panel -->
+          <section id="settings-view" class="view-panel hidden">
+            <div class="settings-container">
+              <h1 class="settings-title">Ajustes</h1>
+              
+              <!-- Equalizer Control Section -->
+              <div class="settings-section">
+                <h2 class="settings-section-title">Ecualizador de Audio</h2>
+                <p class="settings-section-desc">Modifica los niveles de graves y agudos para adaptar el sonido a tu gusto.</p>
+                <div class="eq-controls">
+                  <div class="eq-presets">
+                    <button class="pill active" data-preset="flat">Plano (Predeterminado)</button>
+                    <button class="pill" data-preset="bass">Bass Booster</button>
+                    <button class="pill" data-preset="vocal">Voz Clara</button>
+                    <button class="pill" data-preset="electronic">Electrónica</button>
+                  </div>
+                  <div class="eq-sliders-grid">
+                    <div class="eq-slider-col">
+                      <span class="eq-label">60Hz</span>
+                      <div class="eq-slider-container">
+                        <input type="range" class="eq-slider" min="-12" max="12" value="0">
+                      </div>
+                      <span class="eq-value">0dB</span>
+                    </div>
+                    <div class="eq-slider-col">
+                      <span class="eq-label">230Hz</span>
+                      <div class="eq-slider-container">
+                        <input type="range" class="eq-slider" min="-12" max="12" value="0">
+                      </div>
+                      <span class="eq-value">0dB</span>
+                    </div>
+                    <div class="eq-slider-col">
+                      <span class="eq-label">910Hz</span>
+                      <div class="eq-slider-container">
+                        <input type="range" class="eq-slider" min="-12" max="12" value="0">
+                      </div>
+                      <span class="eq-value">0dB</span>
+                    </div>
+                    <div class="eq-slider-col">
+                      <span class="eq-label">4kHz</span>
+                      <div class="eq-slider-container">
+                        <input type="range" class="eq-slider" min="-12" max="12" value="0">
+                      </div>
+                      <span class="eq-value">0dB</span>
+                    </div>
+                    <div class="eq-slider-col">
+                      <span class="eq-label">14kHz</span>
+                      <div class="eq-slider-container">
+                        <input type="range" class="eq-slider" min="-12" max="12" value="0">
+                      </div>
+                      <span class="eq-value">0dB</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Interface Customization Section -->
+              <div class="settings-section">
+                <h2 class="settings-section-title">Personalización de Pantalla</h2>
+                
+                <div class="settings-toggle-item">
+                  <div class="toggle-text">
+                    <span class="toggle-title">Fondo Gradiente Adaptativo</span>
+                    <span class="toggle-desc">Extrae colores de la carátula y los mueve sutilmente de fondo.</span>
+                  </div>
+                  <label class="switch-toggle">
+                    <input type="checkbox" id="toggle-adaptive-bg" checked>
+                    <span class="slider-round"></span>
+                  </label>
+                </div>
+                
+                <div class="settings-toggle-item">
+                  <div class="toggle-text">
+                    <span class="toggle-title">Ondas de Audio (Visualizador)</span>
+                    <span class="toggle-desc">Muestra ondas senoidales animadas en el visor de letras.</span>
+                  </div>
+                  <label class="switch-toggle">
+                    <input type="checkbox" id="toggle-visualizer" checked>
+                    <span class="slider-round"></span>
+                  </label>
+                </div>
+
+                <div class="settings-toggle-item">
+                  <div class="toggle-text">
+                    <span class="toggle-title">Minirreproductor Flotante</span>
+                    <span class="toggle-desc">Ajusta el tamaño a miniatura compacta siempre visible.</span>
+                  </div>
+                  <label class="switch-toggle">
+                    <input type="checkbox" id="toggle-mini-player">
+                    <span class="slider-round"></span>
+                  </label>
+                </div>
+              </div>
+            </div>
+          </section>
+
+        </div>
+      </main>
+
+    </div>
+  </div>
+
+  <!-- Persistent Player Bar -->
+  <footer id="player-bar" class="hidden">
+    <!-- Left: Track Metadata Info -->
+    <div class="track-info">
+      <img id="player-cover" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=" alt="Cover">
+      <div class="track-text">
+        <div id="player-title" class="title">Ninguna canción seleccionada</div>
+        <div id="player-artist" class="artist">-</div>
+      </div>
+      <!-- Heart (Library Checkmark) button -->
+      <button id="player-like-btn" class="player-icon-btn hidden" title="Añadir a Tu biblioteca">
+        <svg viewBox="0 0 24 24" class="player-icon"><path fill="currentColor" d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+      </button>
+      
+      <!-- Option Menu trigger in Player -->
+      <button id="player-menu-btn" class="player-icon-btn hidden" title="Más opciones">
+        <svg viewBox="0 0 24 24" class="player-icon"><path fill="currentColor" d="M12,16A2,2 0 0,1 14,18A2,2 0 0,1 12,20A2,2 0 0,1 10,18A2,2 0 0,1 12,16M12,10A2,2 0 0,1 14,12A2,2 0 0,1 12,14A2,2 0 0,1 10,12A2,2 0 0,1 12,10M12,4A2,2 0 0,1 14,6A2,2 0 0,1 12,8A2,2 0 0,1 10,6A2,2 0 0,1 12,4Z"/></svg>
+      </button>
+    </div>
+
+    <!-- Center: Playback Controls & Progress Bar -->
+    <div class="player-controls-container">
+      <div class="controls-buttons">
+        <button id="shuffle-btn" class="player-icon-btn" title="Mezclar">
+          <svg viewBox="0 0 24 24" class="player-icon"><path fill="currentColor" d="M10.59,9.17L5.41,4L4,5.41L9.17,10.59L10.59,9.17ZM14.5,4l2.04,2.04L4,18.59L5.41,20L17.96,7.46L20,9.5V4H14.5ZM14.83,13.41L13.41,14.83L16.59,18L14.5,20.09V20.1L20,20.1V14.5L17.96,16.54L14.83,13.41Z"/></svg>
+        </button>
+        <button id="prev-btn" class="player-icon-btn" title="Anterior">
+          <svg viewBox="0 0 24 24" class="player-icon"><path fill="currentColor" d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
+        </button>
+        <button id="play-btn" class="player-icon-btn play-pause-btn" title="Reproducir/Pausa">
+          <svg id="play-icon-svg" viewBox="0 0 24 24" class="player-icon-main"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>
+        </button>
+        <button id="next-btn" class="player-icon-btn" title="Siguiente">
+          <svg viewBox="0 0 24 24" class="player-icon"><path fill="currentColor" d="M6 18l8.5-6L6 6zm9-12h2v12h-2z"/></svg>
+        </button>
+        <button id="download-btn" class="player-icon-btn" title="Descargar">
+          <svg viewBox="0 0 24 24" class="player-icon"><path fill="currentColor" d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z"/></svg>
+        </button>
+      </div>
+      <div class="progress-bar-wrapper">
+        <span id="current-time" class="time-label">0:00</span>
+        <input type="range" id="progress-bar" min="0" max="100" value="0">
+        <span id="total-time" class="time-label">0:00</span>
+      </div>
+    </div>
+
+    <!-- Right: Volume Controls -->
+    <div class="volume-container">
+      <button id="player-lyrics-btn" class="player-icon-btn" title="Letras" style="margin-right: 8px;">
+        <svg viewBox="0 0 24 24" class="player-icon" style="width: 20px; height: 20px;"><path fill="currentColor" d="M12 2A3 3 0 0,0 9 5v6a3 3 0 0,0 6 0V5a3 3 0 0,0-3-3zm7 9a1 1 0 0,1-2 0 5 5 0 0,1-10 0 1 1 0 0,1-2 0 7 7 0 0,0 6 6.93V21h-3a1 1 0 0,0 0 2h8a1 1 0 0,0 0-2h-3v-3.07A7 7 0 0,0 19 11z"/></svg>
+      </button>
+      <button id="volume-icon-btn" class="player-icon-btn">
+        <svg viewBox="0 0 24 24" class="player-icon"><path fill="currentColor" d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
+      </button>
+      <input type="range" id="volume-bar" min="0" max="100" value="50">
+    </div>
+  </footer>
+
+  <!-- Fullscreen Immersive Lyrics Panel -->
+  <div id="lyrics-panel" class="hidden">
+    <div class="lyrics-header">
+      <button id="close-lyrics-btn" class="nav-arrow-btn">&times;</button>
+      <span class="lyrics-song-title" id="lyrics-song-title">Ninguna canción</span>
+      <div class="lyrics-sync-controls" id="lyrics-sync-controls" style="display: none; align-items: center; gap: 8px; margin-left: auto; background: rgba(255, 255, 255, 0.08); padding: 4px 12px; border-radius: 12px; font-size: 13px;">
+        <span style="opacity: 0.7;">Sincronía:</span>
+        <button id="lyrics-sync-delay" title="Retrasar letra (si va adelantada)" class="sync-adj-btn" style="background: none; border: none; color: #fff; cursor: pointer; padding: 2px 6px; border-radius: 4px; font-weight: bold; font-size:12px;">-0.5s</button>
+        <span id="lyrics-sync-offset-label" style="font-weight: bold; color: var(--accent-color);">0.0s</span>
+        <button id="lyrics-sync-advance" title="Adelantar letra (si va retrasada)" class="sync-adj-btn" style="background: none; border: none; color: #fff; cursor: pointer; padding: 2px 6px; border-radius: 4px; font-weight: bold; font-size:12px;">+0.5s</button>
+        <button id="lyrics-sync-reset" title="Restablecer" class="sync-adj-btn" style="background: rgba(255,255,255,0.15); border: none; color: #fff; cursor: pointer; padding: 2px 8px; border-radius: 4px; font-size:11px; margin-left:4px;">Reset</button>
+      </div>
+    </div>
+    <div class="lyrics-content-container">
+      <div id="lyrics-text" class="lyrics-text-body">
+        Elige una canción para ver su letra.
+      </div>
+    </div>
+    <div class="lyrics-visualizer-container" style="width: 100%; height: 80px; position: absolute; bottom: 20px; left: 0; display: flex; justify-content: center; pointer-events: none;">
+      <canvas id="lyrics-visualizer" style="width: 80%; height: 60px;"></canvas>
+    </div>
+  </div>
+
+  <!-- Native standard HTML5 Audio Player (Hidden) -->
+  <audio id="audio-element"></audio>
+
+  <!-- Custom Modal for Creating Playlist -->
+  <div id="playlist-modal" class="auth-container hidden" style="background: rgba(0,0,0,0.7); z-index: 10000;">
+    <div class="auth-card" style="max-width: 380px;">
+      <h2 style="font-size: 20px; text-align: left; margin-bottom: 8px;">Nueva lista de reproducción</h2>
+      <div class="form-group" style="margin-bottom: 24px;">
+        <label for="new-playlist-name" style="margin-bottom: 8px;">Nombre de la lista</label>
+        <input type="text" id="new-playlist-name" placeholder="Mi lista #1" required>
+      </div>
+      <div style="display: flex; gap: 12px; width: 100%;">
+        <button id="modal-cancel-btn" class="btn-danger" style="margin: 0; width: 50%; padding: 12px; font-weight: 600;">Cancelar</button>
+        <button id="modal-submit-btn" class="btn-primary" style="width: 50%; padding: 12px; font-weight: 600;">Crear</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Custom Modal for Importing Playlist -->
+  <div id="import-modal" class="auth-container hidden" style="background: rgba(0,0,0,0.7); z-index: 10000;">
+    <div class="auth-card" style="max-width: 440px;">
+      <h2 style="font-size: 20px; text-align: left; margin-bottom: 8px;">Importar Playlist</h2>
+      <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 16px;">Pega un enlace público de Spotify o YouTube para importar todas sus canciones de forma automática.</p>
+      
+      <div class="form-group" style="margin-bottom: 16px;">
+        <label for="import-playlist-url" style="margin-bottom: 8px;">Enlace de la playlist</label>
+        <input type="text" id="import-playlist-url" placeholder="https://open.spotify.com/playlist/... o https://youtube.com/playlist?list=..." required style="width: 100%;">
+      </div>
+
+      <!-- Import Progress Bar -->
+      <div id="import-progress-container" class="hidden" style="margin-bottom: 16px; background: rgba(255,255,255,0.05); padding: 12px; border-radius: 8px; box-sizing: border-box;">
+        <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 6px;">
+          <span id="import-status-text">Procesando enlace...</span>
+          <span id="import-progress-percent">0%</span>
+        </div>
+        <div style="width: 100%; height: 6px; background: rgba(255,255,255,0.1); border-radius: 3px; overflow: hidden;">
+          <div id="import-progress-bar-fill" style="width: 0%; height: 100%; background: var(--accent-color); transition: width 0.3s;"></div>
+        </div>
+      </div>
+
+      <div style="display: flex; gap: 12px; width: 100%;">
+        <button id="import-cancel-btn" class="btn-danger" style="margin: 0; width: 50%; padding: 12px; font-weight: 600;">Cancelar</button>
+        <button id="import-submit-btn" class="btn-primary" style="width: 50%; padding: 12px; font-weight: 600;">Importar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Global Floating Context Menu -->
+  <div id="context-menu" class="context-menu hidden">
+    <div class="context-menu-item" id="menu-add-to-queue">
+      <svg class="menu-item-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 17h-2v-2h2v2zm2.07-7.75l-.9.92C13.45 12.9 13 13.5 13 15h-2v-.5c0-1.1.45-2.1 1.17-2.83l1.24-1.26c.37-.36.59-.86.59-1.41 0-1.1-.9-2-2-2s-2 .9-2 2H7c0-2.76 2.24-5 5-5s5 2.24 5 5c0 1.04-.42 1.99-1.07 2.75z"/></svg>
+      <span>Añadir a la cola</span>
+    </div>
+    <div class="context-menu-item" id="menu-toggle-library">
+      <svg class="menu-item-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+      <span id="menu-library-text">Añadir a Tu biblioteca</span>
+    </div>
+    <div class="context-menu-item has-submenu" id="menu-add-to-playlist">
+      <svg class="menu-item-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+      <span>Añadir a otra lista</span>
+      <svg class="submenu-arrow" viewBox="0 0 24 24"><path fill="currentColor" d="M8.59,16.59L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.59Z"/></svg>
+      <div class="context-submenu hidden" id="menu-playlist-submenu">
+        <!-- Playlists dynamic list -->
+      </div>
+    </div>
+    <div class="context-menu-item" id="menu-download">
+      <svg class="menu-item-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM17 13l-5 5-5-5h3V9h4v4h3z"/></svg>
+      <span>Descargar</span>
+    </div>
+    <div class="context-menu-item" id="menu-share">
+      <svg class="menu-item-icon" viewBox="0 0 24 24"><path fill="currentColor" d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92 1.61 0 2.92-1.31 2.92-2.92s-1.31-2.92-2.92-2.92z"/></svg>
+      <span>Compartir</span>
+    </div>
+  </div>
+
+  <!-- Toast Notification Overlay -->
+  <div id="toast-container" style="position: absolute; bottom: 105px; right: 24px; display: flex; flex-direction: column; gap: 8px; z-index: 11000; pointer-events: none;"></div>
+
+  <!-- Hidden Official YouTube Player -->
+  <div id="yt-player" style="position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"></div>
+
+  <script type="module" src="/src/renderer.ts"></script>
+</body>
+</html>

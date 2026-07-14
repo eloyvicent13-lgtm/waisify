@@ -1,0 +1,25 @@
+{
+  "cli": {
+    "version": ">= 9.0.0",
+    "appVersionSource": "local"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal"
+    },
+    "preview": {
+      "distribution": "internal"
+    },
+    "production": {
+      "distribution": "store"
+    }
+  },
+  "submit": {
+    "production": {
+      "appleId": "eloy.user@waisify.app",
+      "ascAppId": "6500000000",
+      "appleTeamId": "AB12CD34EF"
+    }
+  }
+}
