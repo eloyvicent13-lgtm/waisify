@@ -165,7 +165,22 @@ export default function PlayerScreen() {
           .replace(/\((official|lyrics|video|mv|feat|with|ft\.|audio|remaster|remastered)\)/gi, '')
           .replace(/\[(official|lyrics|video|mv|feat|with|ft\.|audio|remaster|remastered)\]/gi, '')
           .trim();
-        const searchUrl = `https://lrclib.net/api/search?q=${encodeURIComponent(cleanTitle + ' ' + track.artist)}`;
+        
+        let queryTerm = cleanTitle + ' ' + track.artist;
+        
+        // Smart split if title contains a hyphen (standard YouTube "Artist - Title" format)
+        if (track.title.includes('-')) {
+          const parts = track.title.split('-');
+          const possibleArtist = parts[0].trim();
+          const possibleTitle = parts[1]
+            .replace(/\((official|lyrics|video|mv|feat|with|ft\.|audio|remaster|remastered)\)/gi, '')
+            .replace(/\[(official|lyrics|video|mv|feat|with|ft\.|audio|remaster|remastered)\]/gi, '')
+            .trim();
+          
+          queryTerm = `${possibleTitle} ${possibleArtist}`;
+        }
+
+        const searchUrl = `https://lrclib.net/api/search?q=${encodeURIComponent(queryTerm)}`;
         const searchRes = await axios.get(searchUrl);
         const searchResults = searchRes.data || [];
         lrcData = searchResults.find((item: any) => item.syncedLyrics || item.plainLyrics);

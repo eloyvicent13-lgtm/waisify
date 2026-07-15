@@ -4,6 +4,7 @@ import { Audio } from 'expo-av';
 import axios from 'axios';
 import { setToken, Track } from '../services/api';
 import { getDownloadedTracks } from '../services/downloadService';
+import { documentDirectory, readAsStringAsync, writeAsStringAsync, getInfoAsync } from 'expo-file-system/legacy';
 
 export const AuthContext = createContext<{
   token: string | null;
@@ -36,6 +37,7 @@ export default function RootLayout() {
   const [userId, setUserId] = useState<number | null>(null);
   const [displayName, setDisplayName] = useState('Eloy');
   const [avatarColor, setAvatarColor] = useState('purple-cyan');
+  const [loadingSession, setLoadingSession] = useState(true);
 
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -66,6 +68,31 @@ export default function RootLayout() {
   }, []);
 
   useEffect(() => {
+    async function loadSession() {
+      try {
+        const sessionPath = (documentDirectory || '') + 'session.json';
+        const fileInfo = await getInfoAsync(sessionPath);
+        if (fileInfo.exists) {
+          const content = await readAsStringAsync(sessionPath);
+          const data = JSON.parse(content);
+          if (data && data.token) {
+            setToken(data.token);
+            setTokenState(data.token);
+            setUsername(data.username);
+            setUserId(data.userId);
+            setDisplayName(data.username || 'Eloy');
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to load session:', err);
+      } finally {
+        setLoadingSession(false);
+      }
+    }
+    loadSession();
+  }, []);
+
+  useEffect(() => {
     const timer = setTimeout(() => {
       setIsReady(true);
     }, 100);
@@ -73,7 +100,7 @@ export default function RootLayout() {
   }, []);
 
   useEffect(() => {
-    if (!isReady || !navigationState?.key) return;
+    if (loadingSession || !isReady || !navigationState?.key) return;
 
     const inAuthGroup = segments[0] === '(auth)';
     if (!token && !inAuthGroup) {
@@ -81,29 +108,56 @@ export default function RootLayout() {
     } else if (token && inAuthGroup) {
       router.replace('/(tabs)');
     }
-  }, [token, segments, isReady, navigationState?.key]);
+  }, [token, segments, isReady, navigationState?.key, loadingSession]);
 
-  const login = (t: string, user: string, id: number) => {
+  const login = async (t: string, user: string, id: number) => {
     setToken(t);
     setTokenState(t);
     setUsername(user);
     setUserId(id);
     setDisplayName(user);
+
+    try {
+      const sessionPath = (documentDirectory || '') + 'session.json';
+      await writeAsStringAsync(sessionPath, JSON.stringify({ token: t, username: user, userId: id }));
+    } catch (err) {
+      console.warn('Failed to save session:', err);
+    }
   };
 
-  const logout = () => {
+  const logout = async () => {
     setToken(null);
     setTokenState(null);
     setUsername(null);
     setUserId(null);
     if (sound) {
-      sound.unloadAsync();
+      await sound.unloadAsync();
+    }
+
+    try {
+      const sessionPath = (documentDirectory || '') + 'session.json';
+      await writeAsStringAsync(sessionPath, JSON.stringify({}));
+    } catch (err) {
+      console.warn('Failed to clear session:', err);
     }
   };
 
-  const updateProfile = (name: string, color: string) => {
+  const updateProfile = async (name: string, color: string) => {
     setDisplayName(name);
     setAvatarColor(color);
+
+    try {
+      const sessionPath = (documentDirectory || '') + 'session.json';
+      const fileInfo = await getInfoAsync(sessionPath);
+      if (fileInfo.exists) {
+        const content = await readAsStringAsync(sessionPath);
+        const data = JSON.parse(content);
+        data.username = name;
+        await writeAsStringAsync(sessionPath, JSON.stringify(data));
+      }
+    } catch (err) {
+      console.warn('Failed to update profile session:', err);
+    }
   };
 
   const playTrack = async (track: Track, index: number, newQueue: Track[]) => {
