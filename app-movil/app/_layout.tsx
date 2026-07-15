@@ -177,7 +177,6 @@ export default function RootLayout() {
     }
     
     setIsPlaying(false);
-    setPlayingId(null);
     setPositionMs(0);
 
     try {
@@ -185,6 +184,7 @@ export default function RootLayout() {
       const offlineMatch = offlineTracks.find(t => t.id === track.id);
 
       if (offlineMatch && offlineMatch.localUrl) {
+        setPlayingId(null);
         console.log('[Playback] Playing offline downloaded track:', offlineMatch.localUrl);
         const { sound: newSound } = await Audio.Sound.createAsync(
           { uri: offlineMatch.localUrl },
@@ -217,6 +217,7 @@ export default function RootLayout() {
             console.warn('[Playback] Failed to start background silent session:', silentErr);
           }
         } else {
+          setPlayingId(null);
           const { sound: newSound } = await Audio.Sound.createAsync(
             { uri: `https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3` },
             { shouldPlay: true },
@@ -270,7 +271,19 @@ export default function RootLayout() {
   };
 
   const togglePlay = async () => {
-    if (sound) {
+    if (playingId) {
+      if (isPlaying) {
+        if (sound) {
+          try { await sound.pauseAsync(); } catch(e) {}
+        }
+        setIsPlaying(false);
+      } else {
+        if (sound) {
+          try { await sound.playAsync(); } catch(e) {}
+        }
+        setIsPlaying(true);
+      }
+    } else if (sound) {
       if (isPlaying) {
         await sound.pauseAsync();
         setIsPlaying(false);
@@ -278,8 +291,6 @@ export default function RootLayout() {
         await sound.playAsync();
         setIsPlaying(true);
       }
-    } else if (playingId) {
-      setIsPlaying(!isPlaying);
     }
   };
 
@@ -298,11 +309,16 @@ export default function RootLayout() {
   };
 
   const seekTo = async (millis: number) => {
-    if (sound) {
-      await sound.setPositionAsync(millis);
-    } else if (playingId && playerRef.current) {
-      playerRef.current.seekTo(millis / 1000, true);
+    if (playingId) {
+      if (playerRef.current) {
+        playerRef.current.seekTo(millis / 1000, true);
+      }
+      if (sound) {
+        try { await sound.setPositionAsync(millis); } catch(e) {}
+      }
       setPositionMs(millis);
+    } else if (sound) {
+      await sound.setPositionAsync(millis);
     }
   };
 
@@ -335,19 +351,25 @@ export default function RootLayout() {
           <Stack.Screen name="player" options={{ presentation: 'modal', gestureEnabled: true }} />
         </Stack>
         <View style={{ position: 'absolute', top: -1000, width: 1, height: 1, opacity: 0 }} pointerEvents="none">
-          <YoutubeIframe
-            ref={playerRef}
-            height={1}
-            width={1}
-            videoId={playingId || undefined}
-            play={isPlaying}
-            onChangeState={onYoutubeStateChange}
-            initialPlayerParams={{
-              controls: false,
-              modestbranding: true,
-              preventFullScreen: true,
-            }}
-          />
+          {playingId ? (
+            <YoutubeIframe
+              ref={playerRef}
+              height={1}
+              width={1}
+              videoId={playingId}
+              play={isPlaying}
+              onChangeState={onYoutubeStateChange}
+              webViewProps={{
+                allowsInlineMediaPlayback: true,
+                mediaPlaybackRequiresUserAction: false,
+              }}
+              initialPlayerParams={{
+                controls: false,
+                modestbranding: true,
+                preventFullScreen: true,
+              }}
+            />
+          ) : null}
         </View>
       </PlaybackContext.Provider>
     </AuthContext.Provider>
