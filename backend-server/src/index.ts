@@ -283,18 +283,42 @@ app.get('/api/stream', async (req, res) => {
 
     console.log(`[YouTube Stream] Resolving stream for video ID: "${youtubeId}"`);
     
-    // Resolve stream using YTMUSIC client (unblocked on datacenters) with fallback to default client
+    // Resolve stream using TV client first (smart TV client, rarely blocked, supports all videos),
+    // then fallback to YTMUSIC, and finally default WEB client.
     let info;
+    let clientUsed = 'TV';
     try {
-      info = await youtube.getInfo(youtubeId as string, { client: 'YTMUSIC' });
-      // Fallback if the video isn't on YouTube Music (meaning YTMUSIC client doesn't return streaming data)
+      info = await youtube.getInfo(youtubeId as string, { client: 'TV' });
+      if (!info.streaming_data) {
+        console.log(`[YouTube Stream] TV client returned no streaming data for "${youtubeId}", trying YTMUSIC...`);
+        info = await youtube.getInfo(youtubeId as string, { client: 'YTMUSIC' });
+        clientUsed = 'YTMUSIC';
+      }
       if (!info.streaming_data) {
         console.log(`[YouTube Stream] YTMUSIC client returned no streaming data for "${youtubeId}", trying default client...`);
         info = await youtube.getInfo(youtubeId as string);
+        clientUsed = 'default';
       }
     } catch (e) {
-      console.log(`[YouTube Stream] YTMUSIC client resolution error for "${youtubeId}", falling back to default client...`, e);
-      info = await youtube.getInfo(youtubeId as string);
+      console.log(`[YouTube Stream] TV client error for "${youtubeId}", falling back to YTMUSIC...`, e);
+      try {
+        info = await youtube.getInfo(youtubeId as string, { client: 'YTMUSIC' });
+        clientUsed = 'YTMUSIC';
+        if (!info.streaming_data) {
+          info = await youtube.getInfo(youtubeId as string);
+          clientUsed = 'default';
+        }
+      } catch (e2) {
+        console.log(`[YouTube Stream] YTMUSIC fallback error for "${youtubeId}", trying default client...`, e2);
+        info = await youtube.getInfo(youtubeId as string);
+        clientUsed = 'default';
+      }
+    }
+
+    console.log(`[YouTube Stream] Retreived video metadata using client: "${clientUsed}"`);
+
+    if (!info || !info.streaming_data) {
+      return res.status(404).json({ error: `Streaming data not available for video ID: ${youtubeId}` });
     }
     
     // Attempt best quality audio
