@@ -283,15 +283,44 @@ app.get('/api/stream', async (req, res) => {
     const info = await ytdl.getInfo(youtubeId as string);
     const format = ytdl.chooseFormat(info.formats, { filter: 'audioonly', quality: 'highestaudio' });
     
-    if (!format || !format.url) {
-      return res.status(404).json({ error: 'Audio stream not found' });
+    if (format && format.url) {
+      console.log(`[YouTube Stream] Successfully resolved stream URL for video ID: "${youtubeId}"`);
+      return res.json({ streamUrl: format.url });
+    }
+    throw new Error('No audio format URL found in ytdl-core response');
+  } catch (err: any) {
+    console.warn(`[YouTube Stream] ytdl-core failed to resolve "${youtubeId}" (${err.message}). Trying Piped API fallbacks...`);
+    
+    const pipedInstances = [
+      'https://pipedapi.lunar.icu',
+      'https://pipedapi.tokhmi.xyz',
+      'https://pipedapi.chg.gg',
+      'https://pipedapi.ox.0y.at',
+      'https://pipedapi.kavin.rocks'
+    ];
+
+    for (const inst of pipedInstances) {
+      try {
+        console.log(`[YouTube Stream] Fallback: trying Piped instance: ${inst}`);
+        // Query the Piped API endpoint directly (Pterodactyl DNS resolves this successfully)
+        const response = await fetch(`${inst}/streams/${youtubeId}`);
+        if (response.ok) {
+          const data = (await response.json()) as any;
+          if (data && data.audioStreams && data.audioStreams.length > 0) {
+            const streamUrl = data.audioStreams[0].url;
+            if (streamUrl) {
+              console.log(`[YouTube Stream] Success! Resolved stream URL via Piped instance: ${inst}`);
+              return res.json({ streamUrl });
+            }
+          }
+        }
+      } catch (pipedErr: any) {
+        console.log(`[YouTube Stream] Piped instance ${inst} failed: ${pipedErr.message}`);
+      }
     }
 
-    console.log(`[YouTube Stream] Successfully resolved stream URL for video ID: "${youtubeId}"`);
-    res.json({ streamUrl: format.url });
-  } catch (err: any) {
-    console.error('Streaming resolution error:', err);
-    res.status(500).json({ error: err.message });
+    console.error(`[YouTube Stream] All fallback systems failed for video ID: "${youtubeId}"`);
+    res.status(500).json({ error: 'All streaming resolution methods failed: ' + err.message });
   }
 });
 
