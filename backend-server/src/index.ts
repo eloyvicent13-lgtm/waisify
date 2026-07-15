@@ -277,8 +277,14 @@ app.get('/api/stream', async (req, res) => {
 
     console.log(`[YouTube Stream] Resolving stream for video ID: "${youtubeId}"`);
     
-    // Use getInfo for signature deciphering support
-    const info = await youtube.getInfo(youtubeId as string);
+    // Use getInfo with IOS client to bypass signature decryption blocks and retrieve direct format URLs
+    let info;
+    try {
+      info = await youtube.getInfo(youtubeId as string, { client: 'IOS' });
+    } catch (e) {
+      console.log('[YouTube Stream] IOS client resolution failed, falling back to default client...', e);
+      info = await youtube.getInfo(youtubeId as string);
+    }
     
     // Attempt best quality audio
     let format = info.chooseFormat({ type: 'audio', quality: 'best' });
