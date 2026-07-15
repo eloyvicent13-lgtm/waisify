@@ -17,6 +17,7 @@
     "jsonwebtoken": "^9.0.2",
     "sqlite": "^5.1.1",
     "sqlite3": "^5.1.7",
+    "youtube-po-token-generator": "^0.6.0",
     "youtubei.js": "^17.2.0"
   },
   "devDependencies": {

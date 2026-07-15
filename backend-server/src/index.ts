@@ -270,6 +270,62 @@ app.get('/api/resolve', async (req, res) => {
   }
 });
 
+// Helper function to resolve stream URL using savenow.to (loader.to widget backend)
+async function resolveViaSavenow(youtubeId: string): Promise<string> {
+  const domain = 'p.savenow.to';
+  const downloadUrl = `https://${domain}/api/v2/download?button=1&format=mp3&url=${encodeURIComponent('https://www.youtube.com/watch?v=' + youtubeId)}`;
+  
+  console.log(`[Savenow] Triggering download for ${youtubeId}...`);
+  const response = await fetch(downloadUrl, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Accept': 'application/json'
+    }
+  });
+  
+  if (!response.ok) {
+    throw new Error(`Savenow trigger failed with status ${response.status}`);
+  }
+  
+  const data = (await response.json()) as any;
+  if (data && data.success && data.download_url) {
+    console.log(`[Savenow] Cached stream found instantly!`);
+    return data.download_url;
+  }
+  
+  if (!data || !data.id) {
+    throw new Error('No conversion ID returned from Savenow');
+  }
+  
+  const id = data.id;
+  console.log(`[Savenow] Starting progress polling for ID: ${id}`);
+  
+  // Poll for up to 5 seconds (3 attempts, 1.5s delay) to stay within request timeout limits
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, 1500));
+    try {
+      const progressRes = await fetch(`https://${domain}/api/progress?id=${id}`, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'application/json'
+        }
+      });
+      if (progressRes.ok) {
+        const progData = (await progressRes.json()) as any;
+        console.log(`[Savenow] Poll attempt ${attempt} progress: ${progData.progress / 10}%`);
+        if (progData && progData.success === 1 && progData.download_url) {
+          console.log(`[Savenow] Resolved stream URL: ${progData.download_url}`);
+          return progData.download_url;
+        }
+      }
+    } catch (e: any) {
+      console.warn(`[Savenow] Poll attempt ${attempt} failed:`, e.message);
+    }
+  }
+  
+  throw new Error('Savenow conversion timed out');
+}
+
 // 5. Stream: Resolve YouTube ID to direct audio stream URL
 app.get('/api/stream', async (req, res) => {
   const { youtubeId } = req.query;
@@ -277,8 +333,21 @@ app.get('/api/stream', async (req, res) => {
     return res.status(400).json({ error: 'youtubeId parameter is required' });
   }
 
+  // 1. Try Savenow.to first (highly reliable proxy-based converter)
   try {
-    console.log(`[YouTube Stream] Resolving stream for video ID: "${youtubeId}" using @distube/ytdl-core`);
+    console.log(`[YouTube Stream] Resolving stream for video ID: "${youtubeId}" using Savenow API...`);
+    const streamUrl = await resolveViaSavenow(youtubeId as string);
+    if (streamUrl) {
+      console.log(`[YouTube Stream] Successfully resolved stream URL via Savenow for "${youtubeId}"`);
+      return res.json({ streamUrl });
+    }
+  } catch (savenowErr: any) {
+    console.warn(`[YouTube Stream] Savenow resolution failed for "${youtubeId}":`, savenowErr.message);
+  }
+
+  // 2. Fallback to @distube/ytdl-core
+  try {
+    console.log(`[YouTube Stream] Fallback: Resolving stream for video ID: "${youtubeId}" using @distube/ytdl-core`);
     
     const info = await ytdl.getInfo(youtubeId as string);
     const format = ytdl.chooseFormat(info.formats, { filter: 'audioonly', quality: 'highestaudio' });
