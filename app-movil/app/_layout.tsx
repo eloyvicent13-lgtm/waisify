@@ -62,10 +62,22 @@ export default function RootLayout() {
     async function setupAudio() {
       try {
         await Audio.setAudioModeAsync({
+          allowsRecordingIOS: false,
           playsInSilentModeIOS: true,
           staysActiveInBackground: true,
+          shouldDuckAndroid: true,
           playThroughEarpieceAndroid: false,
         });
+
+        // Write silent track locally
+        const silentPath = (documentDirectory || '') + 'silent.mp3';
+        const fileInfo = await getInfoAsync(silentPath);
+        if (!fileInfo.exists) {
+          await writeAsStringAsync(silentPath, 'SUQzBAAAAAAAAFRYWFgAAAASAAADbWFqb3JfYnJhbmQAbXA0MgBUWFhYAAAAEgAAA21pbm9yX3ZlcnNpb24AMABUWFhYAAAAHAAAA2NvbXBhdGlibGVfYnJhbmRzAGlzb21tcDQyAFRQRTEAAAAOAAADbXVzaWNoYWxsAGJveABUSVQyAAAADgAAA3NpbGVudCBzb25nAFRTU0UAAAAOAAADTGFtZTMuMTAwAP8xYQAAAAAAAP8xYQAAAAAAAP8xYQAAAAAAAP8xYQAAAAAAAP8xYQAAAAAAAP8xYQAAAAAAAP8xYQAAAAAAAP8xYQAAAAAAAP8xYQAAAAAAAP8xYQAAAAAA', {
+            encoding: 'base64'
+          });
+          console.log('[Audio] Wrote silent.mp3 locally');
+        }
       } catch (err) {
         console.warn('[Audio] Setup failed:', err);
       }
@@ -208,9 +220,10 @@ export default function RootLayout() {
           
           try {
             // Play a silent track in a loop to keep the iOS background audio session active
+            const silentPath = (documentDirectory || '') + 'silent.mp3';
             const { sound: silentSound } = await Audio.Sound.createAsync(
-              { uri: 'https://github.com/anars/blank-audio/raw/master/10-seconds-of-silence.mp3' },
-              { shouldPlay: true, isLooping: true, volume: 0.0 }
+              { uri: silentPath },
+              { shouldPlay: true, isLooping: true, volume: 0.1 }
             );
             setSound(silentSound);
           } catch (silentErr) {
