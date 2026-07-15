@@ -18,7 +18,8 @@
   "submit": {
     "production": {
       "ios": {
-        "ascAppId": "6790984918"
+        "ascAppId": "6790984918",
+        "appleId": "eloyperez13@icloud.com"
       }
     }
   }
