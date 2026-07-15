@@ -20,9 +20,15 @@ let youtube: any;
 // Initialize YouTube client dynamically to bypass ESM limitations in CommonJS
 async function initYoutube() {
   try {
-    const { Innertube } = await eval("import('youtubei.js')");
+    const { Innertube, Platform } = await eval("import('youtubei.js')");
+    
+    // Configure custom evaluator shim for YouTube cipher deciphering
+    Platform.shim.eval = async (data: any) => {
+      return new Function(data.output)();
+    };
+
     youtube = await Innertube.create();
-    console.log('youtubei.js Innertube client initialized successfully');
+    console.log('youtubei.js Innertube client initialized successfully with evaluator shim');
   } catch (error) {
     console.error('Failed to initialize Innertube client:', error);
   }
@@ -277,12 +283,17 @@ app.get('/api/stream', async (req, res) => {
 
     console.log(`[YouTube Stream] Resolving stream for video ID: "${youtubeId}"`);
     
-    // Use getInfo with IOS client to bypass signature decryption blocks and retrieve direct format URLs
+    // Resolve stream using YTMUSIC client (unblocked on datacenters) with fallback to default client
     let info;
     try {
-      info = await youtube.getInfo(youtubeId as string, { client: 'IOS' });
+      info = await youtube.getInfo(youtubeId as string, { client: 'YTMUSIC' });
+      // Fallback if the video isn't on YouTube Music (meaning YTMUSIC client doesn't return streaming data)
+      if (!info.streaming_data) {
+        console.log(`[YouTube Stream] YTMUSIC client returned no streaming data for "${youtubeId}", trying default client...`);
+        info = await youtube.getInfo(youtubeId as string);
+      }
     } catch (e) {
-      console.log('[YouTube Stream] IOS client resolution failed, falling back to default client...', e);
+      console.log(`[YouTube Stream] YTMUSIC client resolution error for "${youtubeId}", falling back to default client...`, e);
       info = await youtube.getInfo(youtubeId as string);
     }
     
@@ -290,22 +301,37 @@ app.get('/api/stream', async (req, res) => {
     let format = info.chooseFormat({ type: 'audio', quality: 'best' });
     
     // Fallback 1: Any audio format
-    if (!format || !format.url) {
+    if (!format) {
       console.log(`[YouTube Stream] Best audio quality not found for "${youtubeId}", trying any audio...`);
       format = info.chooseFormat({ type: 'audio', quality: 'any' });
     }
     
     // Fallback 2: Any combined video/audio stream if pure audio is blocked/unavailable
-    if (!format || !format.url) {
+    if (!format) {
       console.log(`[YouTube Stream] Pure audio streams unavailable for "${youtubeId}", trying mixed video/audio...`);
       format = info.chooseFormat({ type: 'video+audio', quality: 'any' });
     }
 
-    if (!format || !format.url) {
-      return res.status(404).json({ error: 'Audio stream not found' });
+    if (!format) {
+      return res.status(404).json({ error: 'Audio stream format not found' });
     }
 
-    res.json({ streamUrl: format.url });
+    // Decipher the URL if it is not directly available (signature encrypted)
+    let streamUrl = format.url;
+    if (!streamUrl) {
+      try {
+        console.log('[YouTube Stream] Audio URL is encrypted, running signature decipher...');
+        streamUrl = await format.decipher(youtube.session.player);
+      } catch (decErr: any) {
+        console.error('[YouTube Stream] Failed to decipher stream URL:', decErr);
+      }
+    }
+
+    if (!streamUrl) {
+      return res.status(404).json({ error: 'Audio stream URL could not be resolved or decrypted' });
+    }
+
+    res.json({ streamUrl });
   } catch (err: any) {
     console.error('Streaming resolution error:', err);
     res.status(500).json({ error: err.message });
