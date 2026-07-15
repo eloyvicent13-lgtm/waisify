@@ -248,10 +248,6 @@ export default function RootLayout() {
   const onYoutubeStateChange = (state: string) => {
     if (state === 'ended') {
       playNext();
-    } else if (state === 'playing') {
-      setIsPlaying(true);
-    } else if (state === 'paused') {
-      setIsPlaying(false);
     }
   };
 

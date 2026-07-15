@@ -26,6 +26,7 @@ export default function PlayerScreen() {
   const [loadingLyrics, setLoadingLyrics] = useState(false);
   const [showLyrics, setShowLyrics] = useState(false);
   const [activeLineIndex, setActiveLineIndex] = useState(-1);
+  const [barWidth, setBarWidth] = useState(0);
 
   const [downloading, setDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
@@ -419,10 +420,22 @@ export default function PlayerScreen() {
 
       <View style={styles.controllerPanel}>
         <View style={styles.progressRow}>
-          <View style={styles.trackBar}>
+          <TouchableOpacity 
+            activeOpacity={1}
+            onPress={(e) => {
+              if (barWidth > 0 && playback?.durationMs) {
+                const clickX = e.nativeEvent.locationX;
+                const pct = clickX / barWidth;
+                const targetMs = Math.floor(pct * playback.durationMs);
+                playback.seekTo(targetMs);
+              }
+            }}
+            style={styles.trackBar}
+            onLayout={(e) => setBarWidth(e.nativeEvent.layout.width)}
+          >
             <View style={[styles.progressFill, { width: `${progressPct}%` }]} />
             <View style={[styles.progressHandle, { left: `${progressPct}%`, marginLeft: -5 }]} />
-          </View>
+          </TouchableOpacity>
           <View style={styles.timeRow}>
             <Text style={styles.timeText}>{formatTime(positionMs)}</Text>
             <Text style={styles.timeText}>{formatTime(durationMs)}</Text>
