@@ -3,8 +3,10 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
-import ytdl from '@distube/ytdl-core';
+import youtubedl from 'youtube-dl-exec';
 import { initDatabase, getDb } from './database';
+import fs from 'fs';
+import path from 'path';
 
 dotenv.config();
 
@@ -300,8 +302,8 @@ async function resolveViaSavenow(youtubeId: string): Promise<string> {
   const id = data.id;
   console.log(`[Savenow] Starting progress polling for ID: ${id}`);
   
-  // Poll for up to 5 seconds (3 attempts, 1.5s delay) to stay within request timeout limits
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  // Poll for up to 30 seconds (20 attempts, 1.5s delay) to stay within request timeout limits
+  for (let attempt = 1; attempt <= 20; attempt++) {
     await new Promise(resolve => setTimeout(resolve, 1500));
     try {
       const progressRes = await fetch(`https://${domain}/api/progress?id=${id}`, {
@@ -333,7 +335,28 @@ app.get('/api/stream', async (req, res) => {
     return res.status(400).json({ error: 'youtubeId parameter is required' });
   }
 
-  // 1. Try Savenow.to first (highly reliable proxy-based converter)
+  // 1. Try youtube-dl-exec first (Fastest, uses yt-dlp which bypasses bot blocks natively)
+  try {
+    console.log(`[YouTube Stream] Resolving stream for video ID: "${youtubeId}" using youtube-dl-exec...`);
+    
+    const options: any = { getUrl: true, format: 'bestaudio' };
+    const cookiesPath = path.resolve(process.cwd(), 'youtube.com_cookies.txt');
+    if (fs.existsSync(cookiesPath)) {
+      options.cookies = cookiesPath;
+    }
+    
+    const streamUrl = await youtubedl(`https://www.youtube.com/watch?v=${youtubeId}`, options);
+    
+    if (streamUrl && typeof streamUrl === 'string') {
+      console.log(`[YouTube Stream] Successfully resolved stream URL for video ID: "${youtubeId}"`);
+      return res.json({ streamUrl });
+    }
+    throw new Error('No audio format URL found in youtube-dl response');
+  } catch (err: any) {
+    console.warn(`[YouTube Stream] youtube-dl failed to resolve "${youtubeId}" (${err.message}). Falling back to Savenow...`);
+  }
+
+  // 2. Try Savenow.to (Proxy fallback, takes ~20-30s if not cached)
   try {
     console.log(`[YouTube Stream] Resolving stream for video ID: "${youtubeId}" using Savenow API...`);
     const streamUrl = await resolveViaSavenow(youtubeId as string);
@@ -345,20 +368,8 @@ app.get('/api/stream', async (req, res) => {
     console.warn(`[YouTube Stream] Savenow resolution failed for "${youtubeId}":`, savenowErr.message);
   }
 
-  // 2. Fallback to @distube/ytdl-core
-  try {
-    console.log(`[YouTube Stream] Fallback: Resolving stream for video ID: "${youtubeId}" using @distube/ytdl-core`);
-    
-    const info = await ytdl.getInfo(youtubeId as string);
-    const format = ytdl.chooseFormat(info.formats, { filter: 'audioonly', quality: 'highestaudio' });
-    
-    if (format && format.url) {
-      console.log(`[YouTube Stream] Successfully resolved stream URL for video ID: "${youtubeId}"`);
-      return res.json({ streamUrl: format.url });
-    }
-    throw new Error('No audio format URL found in ytdl-core response');
-  } catch (err: any) {
-    console.warn(`[YouTube Stream] ytdl-core failed to resolve "${youtubeId}" (${err.message}). Trying Piped API fallbacks...`);
+  // 3. Fallback to Piped Instances
+  console.log(`[YouTube Stream] Trying Piped API fallbacks...`);
     
     const pipedInstances = [
       'https://pipedapi.lunar.icu',
@@ -389,8 +400,7 @@ app.get('/api/stream', async (req, res) => {
     }
 
     console.error(`[YouTube Stream] All fallback systems failed for video ID: "${youtubeId}"`);
-    res.status(500).json({ error: 'All streaming resolution methods failed: ' + err.message });
-  }
+    res.status(500).json({ error: 'All streaming resolution methods failed' });
 });
 
 

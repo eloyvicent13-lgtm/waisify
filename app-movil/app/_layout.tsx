@@ -1,6 +1,9 @@
 import React, { createContext, useState, useEffect } from 'react';
 import { Stack, useRouter, useSegments, useRootNavigationState } from 'expo-router';
 import { Audio } from 'expo-av';
+import YoutubeIframe from 'react-native-youtube-iframe';
+import { View } from 'react-native';
+import { useRef } from 'react';
 import axios from 'axios';
 import { setToken, Track } from '../services/api';
 import { getDownloadedTracks } from '../services/downloadService';
@@ -47,6 +50,8 @@ export default function RootLayout() {
   const [sound, setSound] = useState<Audio.Sound | null>(null);
   const [positionMs, setPositionMs] = useState(0);
   const [durationMs, setDurationMs] = useState(0);
+  const [playingId, setPlayingId] = useState<string | null>(null);
+  const playerRef = useRef<any>(null);
 
   const router = useRouter();
   const segments = useSegments();
@@ -168,53 +173,79 @@ export default function RootLayout() {
 
     if (sound) {
       await sound.unloadAsync();
+      setSound(null);
     }
+    
+    setIsPlaying(false);
+    setPlayingId(null);
+    setPositionMs(0);
 
     try {
-      let streamUrl = '';
-
-      // 1. Check if track is downloaded locally
       const offlineTracks = await getDownloadedTracks();
       const offlineMatch = offlineTracks.find(t => t.id === track.id);
 
       if (offlineMatch && offlineMatch.localUrl) {
         console.log('[Playback] Playing offline downloaded track:', offlineMatch.localUrl);
-        streamUrl = offlineMatch.localUrl;
+        const { sound: newSound } = await Audio.Sound.createAsync(
+          { uri: offlineMatch.localUrl },
+          { shouldPlay: true },
+          onPlaybackStatusUpdate
+        );
+        setSound(newSound);
+        setIsPlaying(true);
       } else {
-        // 2. Fetch network stream URL from backend
-        let youtubeId = track.youtubeId;
-        if (!youtubeId) {
+        let yId = track.youtubeId;
+        if (!yId) {
           const res = await axios.get(`http://149.202.84.78:8150/api/resolve?title=${encodeURIComponent(track.title)}&artist=${encodeURIComponent(track.artist)}`);
-          youtubeId = res.data.youtubeId;
-          track.youtubeId = youtubeId;
+          yId = res.data.youtubeId;
+          track.youtubeId = yId;
         }
 
-        if (youtubeId) {
-          try {
-            streamUrl = await resolveStreamUrl(youtubeId);
-          } catch (err) {
-            console.warn('[Playback] Failed to resolve live streaming URL, using fallback:', err);
-          }
+        if (yId) {
+          console.log('[Playback] Playing via YouTube IFrame:', yId);
+          setPlayingId(yId);
+          setIsPlaying(true);
+        } else {
+          const { sound: newSound } = await Audio.Sound.createAsync(
+            { uri: `https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3` },
+            { shouldPlay: true },
+            onPlaybackStatusUpdate
+          );
+          setSound(newSound);
+          setIsPlaying(true);
         }
       }
-
-      // 3. Fallback to demo audio
-      if (!streamUrl) {
-        streamUrl = `https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3`;
-      }
-
-      const { sound: newSound } = await Audio.Sound.createAsync(
-        { uri: streamUrl },
-        { shouldPlay: true },
-        onPlaybackStatusUpdate
-      );
-
-      setSound(newSound);
-      setIsPlaying(true);
     } catch (e) {
       console.error('Failed to load track audio:', e);
     }
   };
+
+  const onYoutubeStateChange = (state: string) => {
+    if (state === 'ended') {
+      playNext();
+    } else if (state === 'playing') {
+      setIsPlaying(true);
+    } else if (state === 'paused') {
+      setIsPlaying(false);
+    }
+  };
+
+  useEffect(() => {
+    let interval: any;
+    if (isPlaying && playingId && playerRef.current) {
+      interval = setInterval(async () => {
+        try {
+          const elapsed_sec = await playerRef.current.getCurrentTime();
+          const duration_sec = await playerRef.current.getDuration();
+          if (elapsed_sec > 0) {
+            setPositionMs(elapsed_sec * 1000);
+            setDurationMs(duration_sec * 1000);
+          }
+        } catch(e) {}
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [isPlaying, playingId]);
 
   const onPlaybackStatusUpdate = (status: any) => {
     if (status.isLoaded) {
@@ -228,13 +259,16 @@ export default function RootLayout() {
   };
 
   const togglePlay = async () => {
-    if (!sound) return;
-    if (isPlaying) {
-      await sound.pauseAsync();
-      setIsPlaying(false);
-    } else {
-      await sound.playAsync();
-      setIsPlaying(true);
+    if (sound) {
+      if (isPlaying) {
+        await sound.pauseAsync();
+        setIsPlaying(false);
+      } else {
+        await sound.playAsync();
+        setIsPlaying(true);
+      }
+    } else if (playingId) {
+      setIsPlaying(!isPlaying);
     }
   };
 
@@ -255,6 +289,9 @@ export default function RootLayout() {
   const seekTo = async (millis: number) => {
     if (sound) {
       await sound.setPositionAsync(millis);
+    } else if (playingId && playerRef.current) {
+      playerRef.current.seekTo(millis / 1000, true);
+      setPositionMs(millis);
     }
   };
 
@@ -286,6 +323,21 @@ export default function RootLayout() {
           <Stack.Screen name="(tabs)" options={{ gestureEnabled: false }} />
           <Stack.Screen name="player" options={{ presentation: 'modal', gestureEnabled: true }} />
         </Stack>
+        <View style={{ position: 'absolute', top: -1000, width: 1, height: 1, opacity: 0 }} pointerEvents="none">
+          <YoutubeIframe
+            ref={playerRef}
+            height={1}
+            width={1}
+            videoId={playingId || undefined}
+            play={isPlaying}
+            onChangeState={onYoutubeStateChange}
+            initialPlayerParams={{
+              controls: false,
+              modestbranding: true,
+              preventFullScreen: true,
+            }}
+          />
+        </View>
       </PlaybackContext.Provider>
     </AuthContext.Provider>
   );

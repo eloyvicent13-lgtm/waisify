@@ -28,7 +28,7 @@ export async function resolveStreamUrl(youtubeId: string): Promise<string> {
   // 2. Fallback: Request from backend
   try {
     console.log('[StreamService] Falling back to backend server stream resolution...');
-    const streamRes = await axios.get(`http://149.202.84.78:8150/api/stream?youtubeId=${youtubeId}`, { timeout: 8000 });
+    const streamRes = await axios.get(`http://149.202.84.78:8150/api/stream?youtubeId=${youtubeId}`, { timeout: 35000 });
     return streamRes.data.streamUrl || '';
   } catch (err: any) {
     console.error('[StreamService] Backend stream resolution failed:', err.message);
