@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
+import ytdl from '@distube/ytdl-core';
 import { initDatabase, getDb } from './database';
 
 dotenv.config();
@@ -277,85 +278,17 @@ app.get('/api/stream', async (req, res) => {
   }
 
   try {
-    if (!youtube) {
-      return res.status(503).json({ error: 'YouTube client is initializing' });
-    }
-
-    console.log(`[YouTube Stream] Resolving stream for video ID: "${youtubeId}"`);
+    console.log(`[YouTube Stream] Resolving stream for video ID: "${youtubeId}" using @distube/ytdl-core`);
     
-    // Resolve stream using TV client first (smart TV client, rarely blocked, supports all videos),
-    // then fallback to YTMUSIC, and finally default WEB client.
-    let info;
-    let clientUsed = 'TV';
-    try {
-      info = await youtube.getInfo(youtubeId as string, { client: 'TV' });
-      if (!info.streaming_data) {
-        console.log(`[YouTube Stream] TV client returned no streaming data for "${youtubeId}", trying YTMUSIC...`);
-        info = await youtube.getInfo(youtubeId as string, { client: 'YTMUSIC' });
-        clientUsed = 'YTMUSIC';
-      }
-      if (!info.streaming_data) {
-        console.log(`[YouTube Stream] YTMUSIC client returned no streaming data for "${youtubeId}", trying default client...`);
-        info = await youtube.getInfo(youtubeId as string);
-        clientUsed = 'default';
-      }
-    } catch (e) {
-      console.log(`[YouTube Stream] TV client error for "${youtubeId}", falling back to YTMUSIC...`, e);
-      try {
-        info = await youtube.getInfo(youtubeId as string, { client: 'YTMUSIC' });
-        clientUsed = 'YTMUSIC';
-        if (!info.streaming_data) {
-          info = await youtube.getInfo(youtubeId as string);
-          clientUsed = 'default';
-        }
-      } catch (e2) {
-        console.log(`[YouTube Stream] YTMUSIC fallback error for "${youtubeId}", trying default client...`, e2);
-        info = await youtube.getInfo(youtubeId as string);
-        clientUsed = 'default';
-      }
-    }
-
-    console.log(`[YouTube Stream] Retreived video metadata using client: "${clientUsed}"`);
-
-    if (!info || !info.streaming_data) {
-      return res.status(404).json({ error: `Streaming data not available for video ID: ${youtubeId}` });
-    }
+    const info = await ytdl.getInfo(youtubeId as string);
+    const format = ytdl.chooseFormat(info.formats, { filter: 'audioonly', quality: 'highestaudio' });
     
-    // Attempt best quality audio
-    let format = info.chooseFormat({ type: 'audio', quality: 'best' });
-    
-    // Fallback 1: Any audio format
-    if (!format) {
-      console.log(`[YouTube Stream] Best audio quality not found for "${youtubeId}", trying any audio...`);
-      format = info.chooseFormat({ type: 'audio', quality: 'any' });
-    }
-    
-    // Fallback 2: Any combined video/audio stream if pure audio is blocked/unavailable
-    if (!format) {
-      console.log(`[YouTube Stream] Pure audio streams unavailable for "${youtubeId}", trying mixed video/audio...`);
-      format = info.chooseFormat({ type: 'video+audio', quality: 'any' });
+    if (!format || !format.url) {
+      return res.status(404).json({ error: 'Audio stream not found' });
     }
 
-    if (!format) {
-      return res.status(404).json({ error: 'Audio stream format not found' });
-    }
-
-    // Decipher the URL if it is not directly available (signature encrypted)
-    let streamUrl = format.url;
-    if (!streamUrl) {
-      try {
-        console.log('[YouTube Stream] Audio URL is encrypted, running signature decipher...');
-        streamUrl = await format.decipher(youtube.session.player);
-      } catch (decErr: any) {
-        console.error('[YouTube Stream] Failed to decipher stream URL:', decErr);
-      }
-    }
-
-    if (!streamUrl) {
-      return res.status(404).json({ error: 'Audio stream URL could not be resolved or decrypted' });
-    }
-
-    res.json({ streamUrl });
+    console.log(`[YouTube Stream] Successfully resolved stream URL for video ID: "${youtubeId}"`);
+    res.json({ streamUrl: format.url });
   } catch (err: any) {
     console.error('Streaming resolution error:', err);
     res.status(500).json({ error: err.message });
