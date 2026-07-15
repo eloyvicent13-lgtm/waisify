@@ -180,10 +180,42 @@ export default function PlayerScreen() {
           queryTerm = `${possibleTitle} ${possibleArtist}`;
         }
 
-        const searchUrl = `https://lrclib.net/api/search?q=${encodeURIComponent(queryTerm)}`;
-        const searchRes = await axios.get(searchUrl);
-        const searchResults = searchRes.data || [];
-        lrcData = searchResults.find((item: any) => item.syncedLyrics || item.plainLyrics);
+        try {
+          const searchUrl = `https://lrclib.net/api/search?q=${encodeURIComponent(queryTerm)}`;
+          const searchRes = await axios.get(searchUrl);
+          const searchResults = searchRes.data || [];
+          lrcData = searchResults.find((item: any) => item.syncedLyrics || item.plainLyrics);
+        } catch (searchErr) {
+          console.log('[Lyrics] Fuzzy search failed, trying title-only search...');
+        }
+      }
+
+      // 3. Try clean Title-only search + JS-side artist matching fallback
+      if (!lrcData) {
+        try {
+          let titleOnly = track.title;
+          if (track.title.includes('-')) {
+            const parts = track.title.split('-');
+            titleOnly = parts[1] || parts[0];
+          }
+          const cleanTitleOnly = titleOnly
+            .replace(/\((official|lyrics|video|mv|feat|with|ft\.|audio|remaster|remastered)\)/gi, '')
+            .replace(/\[(official|lyrics|video|mv|feat|with|ft\.|audio|remaster|remastered)\]/gi, '')
+            .trim();
+
+          const searchUrl = `https://lrclib.net/api/search?q=${encodeURIComponent(cleanTitleOnly)}`;
+          const searchRes = await axios.get(searchUrl);
+          const searchResults = searchRes.data || [];
+
+          lrcData = searchResults.find((item: any) => {
+            if (!item.syncedLyrics && !item.plainLyrics) return false;
+            const itemArtist = (item.artistName || item.artist || '').toLowerCase();
+            const trackArtist = (track.artist || '').toLowerCase();
+            return itemArtist.includes(trackArtist) || trackArtist.includes(itemArtist);
+          });
+        } catch (titleOnlyErr) {
+          console.log('[Lyrics] Title-only search failed');
+        }
       }
       
       if (lrcData) {

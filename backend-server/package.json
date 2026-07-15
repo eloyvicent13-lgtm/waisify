@@ -16,7 +16,7 @@
     "jsonwebtoken": "^9.0.2",
     "sqlite": "^5.1.1",
     "sqlite3": "^5.1.7",
-    "youtubei.js": "^17.2.0"
+    "youtubei.js": "^17.4.0"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
