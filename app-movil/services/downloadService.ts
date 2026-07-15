@@ -9,6 +9,7 @@ import {
 } from 'expo-file-system/legacy';
 import axios from 'axios';
 import { Track } from './api';
+import { resolveStreamUrl } from './streamService';
 
 const DOWNLOADS_DIR = (documentDirectory || '') + 'downloads/';
 const METADATA_FILE = DOWNLOADS_DIR + 'metadata.json';
@@ -68,8 +69,7 @@ export async function downloadTrack(track: Track, onProgress?: (progress: number
     throw new Error('Could not resolve track to download');
   }
 
-  const streamRes = await axios.get(`http://149.202.84.78:8150/api/stream?youtubeId=${youtubeId}`);
-  const streamUrl = streamRes.data.streamUrl;
+  const streamUrl = await resolveStreamUrl(youtubeId!);
   if (!streamUrl) {
     throw new Error('No stream URL resolved from backend');
   }

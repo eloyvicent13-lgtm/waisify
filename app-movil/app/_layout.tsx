@@ -4,6 +4,7 @@ import { Audio } from 'expo-av';
 import axios from 'axios';
 import { setToken, Track } from '../services/api';
 import { getDownloadedTracks } from '../services/downloadService';
+import { resolveStreamUrl } from '../services/streamService';
 import { documentDirectory, readAsStringAsync, writeAsStringAsync, getInfoAsync } from 'expo-file-system/legacy';
 
 export const AuthContext = createContext<{
@@ -190,8 +191,7 @@ export default function RootLayout() {
 
         if (youtubeId) {
           try {
-            const streamRes = await axios.get(`http://149.202.84.78:8150/api/stream?youtubeId=${youtubeId}`);
-            streamUrl = streamRes.data.streamUrl;
+            streamUrl = await resolveStreamUrl(youtubeId);
           } catch (err) {
             console.warn('[Playback] Failed to resolve live streaming URL, using fallback:', err);
           }
