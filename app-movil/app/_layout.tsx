@@ -205,6 +205,17 @@ export default function RootLayout() {
           console.log('[Playback] Playing via YouTube IFrame:', yId);
           setPlayingId(yId);
           setIsPlaying(true);
+          
+          try {
+            // Play a silent track in a loop to keep the iOS background audio session active
+            const { sound: silentSound } = await Audio.Sound.createAsync(
+              { uri: 'https://github.com/anars/blank-audio/raw/master/10-seconds-of-silence.mp3' },
+              { shouldPlay: true, isLooping: true, volume: 0.0 }
+            );
+            setSound(silentSound);
+          } catch (silentErr) {
+            console.warn('[Playback] Failed to start background silent session:', silentErr);
+          }
         } else {
           const { sound: newSound } = await Audio.Sound.createAsync(
             { uri: `https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3` },
