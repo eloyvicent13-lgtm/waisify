@@ -220,12 +220,23 @@ export default function RootLayout() {
           
           try {
             // Play a silent track in a loop to keep the iOS background audio session active
-            const silentPath = (documentDirectory || '') + 'silent.mp3';
-            const { sound: silentSound } = await Audio.Sound.createAsync(
-              { uri: silentPath },
-              { shouldPlay: true, isLooping: true, volume: 0.1 }
-            );
-            setSound(silentSound);
+            let silentSoundInstance;
+            try {
+              const silentPath = (documentDirectory || '') + 'silent.mp3';
+              const { sound: silentSound } = await Audio.Sound.createAsync(
+                { uri: silentPath },
+                { shouldPlay: true, isLooping: true, volume: 0.1 }
+              );
+              silentSoundInstance = silentSound;
+            } catch (localErr) {
+              console.warn('[Playback] Failed to load local silent.mp3, using network fallback:', localErr);
+              const { sound: silentSound } = await Audio.Sound.createAsync(
+                { uri: 'https://github.com/anars/blank-audio/raw/master/10-seconds-of-silence.mp3' },
+                { shouldPlay: true, isLooping: true, volume: 0.1 }
+              );
+              silentSoundInstance = silentSound;
+            }
+            setSound(silentSoundInstance);
           } catch (silentErr) {
             console.warn('[Playback] Failed to start background silent session:', silentErr);
           }
@@ -359,7 +370,7 @@ export default function RootLayout() {
           <Stack.Screen name="(tabs)" options={{ gestureEnabled: false }} />
           <Stack.Screen name="player" options={{ presentation: 'modal', gestureEnabled: true }} />
         </Stack>
-        <View style={{ position: 'absolute', top: -1000, width: 1, height: 1, opacity: 0 }} pointerEvents="none">
+        <View style={{ position: 'absolute', bottom: 10, right: 10, width: 10, height: 10, opacity: 0.01 }} pointerEvents="none">
           {playingId ? (
             <YoutubeIframe
               ref={playerRef}
