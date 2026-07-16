@@ -292,17 +292,7 @@ export default function RootLayout() {
 
   const togglePlay = async () => {
     if (playingId) {
-      if (isPlaying) {
-        if (sound) {
-          try { await sound.pauseAsync(); } catch(e) {}
-        }
-        setIsPlaying(false);
-      } else {
-        if (sound) {
-          try { await sound.playAsync(); } catch(e) {}
-        }
-        setIsPlaying(true);
-      }
+      setIsPlaying(!isPlaying);
     } else if (sound) {
       if (isPlaying) {
         await sound.pauseAsync();
@@ -332,9 +322,6 @@ export default function RootLayout() {
     if (playingId) {
       if (playerRef.current) {
         playerRef.current.seekTo(millis / 1000, true);
-      }
-      if (sound) {
-        try { await sound.setPositionAsync(millis); } catch(e) {}
       }
       setPositionMs(millis);
     } else if (sound) {
