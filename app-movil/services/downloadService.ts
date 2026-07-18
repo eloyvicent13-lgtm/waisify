@@ -9,8 +9,8 @@ import {
 } from 'expo-file-system/legacy';
 import axios from 'axios';
 import { Track } from './api';
-import { resolveStreamUrl } from './streamService';
 
+const API_BASE = 'http://149.202.84.78:8150';
 const DOWNLOADS_DIR = (documentDirectory || '') + 'downloads/';
 const METADATA_FILE = DOWNLOADS_DIR + 'metadata.json';
 
@@ -60,7 +60,7 @@ export async function downloadTrack(track: Track, onProgress?: (progress: number
   
   let youtubeId = track.youtubeId;
   if (!youtubeId) {
-    const res = await axios.get(`http://149.202.84.78:8150/api/resolve?title=${encodeURIComponent(track.title)}&artist=${encodeURIComponent(track.artist)}`);
+    const res = await axios.get(`${API_BASE}/api/resolve?title=${encodeURIComponent(track.title)}&artist=${encodeURIComponent(track.artist)}`);
     youtubeId = res.data.youtubeId;
     track.youtubeId = youtubeId;
   }
@@ -69,10 +69,9 @@ export async function downloadTrack(track: Track, onProgress?: (progress: number
     throw new Error('Could not resolve track to download');
   }
 
-  const streamUrl = await resolveStreamUrl(youtubeId!);
-  if (!streamUrl) {
-    throw new Error('No stream URL resolved from backend');
-  }
+  // Proxied through our backend (not a raw googlevideo URL) so it isn't
+  // IP-locked to whoever resolved it.
+  const streamUrl = `${API_BASE}/api/audio?youtubeId=${youtubeId}`;
 
   const localUrl = getLocalTrackPath(track.id);
 

@@ -1,14 +1,12 @@
 import React, { createContext, useState, useEffect } from 'react';
 import { Stack, useRouter, useSegments, useRootNavigationState } from 'expo-router';
 import { Audio } from 'expo-av';
-import YoutubeIframe from 'react-native-youtube-iframe';
-import { View } from 'react-native';
-import { useRef } from 'react';
 import axios from 'axios';
 import { setToken, Track } from '../services/api';
 import { getDownloadedTracks } from '../services/downloadService';
-import { resolveStreamUrl } from '../services/streamService';
 import { documentDirectory, readAsStringAsync, writeAsStringAsync, getInfoAsync } from 'expo-file-system/legacy';
+
+const API_BASE = 'http://149.202.84.78:8150';
 
 export const AuthContext = createContext<{
   token: string | null;
@@ -50,8 +48,6 @@ export default function RootLayout() {
   const [sound, setSound] = useState<Audio.Sound | null>(null);
   const [positionMs, setPositionMs] = useState(0);
   const [durationMs, setDurationMs] = useState(0);
-  const [playingId, setPlayingId] = useState<string | null>(null);
-  const playerRef = useRef<any>(null);
 
   const router = useRouter();
   const segments = useSegments();
@@ -68,16 +64,6 @@ export default function RootLayout() {
           shouldDuckAndroid: true,
           playThroughEarpieceAndroid: false,
         });
-
-        // Write silent track locally
-        const silentPath = (documentDirectory || '') + 'silent.mp3';
-        const fileInfo = await getInfoAsync(silentPath);
-        if (!fileInfo.exists) {
-          await writeAsStringAsync(silentPath, 'SUQzBAAAAAAAAFRYWFgAAAASAAADbWFqb3JfYnJhbmQAbXA0MgBUWFhYAAAAEgAAA21pbm9yX3ZlcnNpb24AMABUWFhYAAAAHAAAA2NvbXBhdGlibGVfYnJhbmRzAGlzb21tcDQyAFRQRTEAAAAOAAADbXVzaWNoYWxsAGJveABUSVQyAAAADgAAA3NpbGVudCBzb25nAFRTU0UAAAAOAAADTGFtZTMuMTAwAP8xYQAAAAAAAP8xYQAAAAAAAP8xYQAAAAAAAP8xYQAAAAAAAP8xYQAAAAAAAP8xYQAAAAAAAP8xYQAAAAAAAP8xYQAAAAAAAP8xYQAAAAAAAP8xYQAAAAAA', {
-            encoding: 'base64'
-          });
-          console.log('[Audio] Wrote silent.mp3 locally');
-        }
       } catch (err) {
         console.warn('[Audio] Setup failed:', err);
       }
@@ -190,94 +176,48 @@ export default function RootLayout() {
     
     setIsPlaying(false);
     setPositionMs(0);
+    setDurationMs(0);
 
     try {
       const offlineTracks = await getDownloadedTracks();
       const offlineMatch = offlineTracks.find(t => t.id === track.id);
 
+      let uri: string | null = null;
+
       if (offlineMatch && offlineMatch.localUrl) {
-        setPlayingId(null);
         console.log('[Playback] Playing offline downloaded track:', offlineMatch.localUrl);
-        const { sound: newSound } = await Audio.Sound.createAsync(
-          { uri: offlineMatch.localUrl },
-          { shouldPlay: true },
-          onPlaybackStatusUpdate
-        );
-        setSound(newSound);
-        setIsPlaying(true);
+        uri = offlineMatch.localUrl;
       } else {
         let yId = track.youtubeId;
         if (!yId) {
-          const res = await axios.get(`http://149.202.84.78:8150/api/resolve?title=${encodeURIComponent(track.title)}&artist=${encodeURIComponent(track.artist)}`);
+          const res = await axios.get(`${API_BASE}/api/resolve?title=${encodeURIComponent(track.title)}&artist=${encodeURIComponent(track.artist)}`);
           yId = res.data.youtubeId;
           track.youtubeId = yId;
         }
-
         if (yId) {
-          console.log('[Playback] Playing via YouTube IFrame:', yId);
-          setPlayingId(yId);
-          setIsPlaying(true);
-          
-          try {
-            // Play a silent track in a loop to keep the iOS background audio session active
-            let silentSoundInstance;
-            try {
-              const silentPath = (documentDirectory || '') + 'silent.mp3';
-              const { sound: silentSound } = await Audio.Sound.createAsync(
-                { uri: silentPath },
-                { shouldPlay: true, isLooping: true, volume: 0.1 }
-              );
-              silentSoundInstance = silentSound;
-            } catch (localErr) {
-              console.warn('[Playback] Failed to load local silent.mp3, using network fallback:', localErr);
-              const { sound: silentSound } = await Audio.Sound.createAsync(
-                { uri: 'https://github.com/anars/blank-audio/raw/master/10-seconds-of-silence.mp3' },
-                { shouldPlay: true, isLooping: true, volume: 0.1 }
-              );
-              silentSoundInstance = silentSound;
-            }
-            setSound(silentSoundInstance);
-          } catch (silentErr) {
-            console.warn('[Playback] Failed to start background silent session:', silentErr);
-          }
-        } else {
-          setPlayingId(null);
-          const { sound: newSound } = await Audio.Sound.createAsync(
-            { uri: `https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3` },
-            { shouldPlay: true },
-            onPlaybackStatusUpdate
-          );
-          setSound(newSound);
-          setIsPlaying(true);
+          // Proxied through our backend (not a raw googlevideo URL) so it
+          // isn't IP-locked to whoever resolved it, and supports Range
+          // requests for native seeking.
+          uri = `${API_BASE}/api/audio?youtubeId=${yId}`;
         }
       }
+
+      if (!uri) {
+        console.error('[Playback] No stream resolved for track, aborting playback:', track.title);
+        return;
+      }
+
+      const { sound: newSound } = await Audio.Sound.createAsync(
+        { uri },
+        { shouldPlay: true, progressUpdateIntervalMillis: 500 },
+        onPlaybackStatusUpdate
+      );
+      setSound(newSound);
+      setIsPlaying(true);
     } catch (e) {
       console.error('Failed to load track audio:', e);
     }
   };
-
-  const onYoutubeStateChange = (state: string) => {
-    if (state === 'ended') {
-      playNext();
-    }
-  };
-
-  useEffect(() => {
-    let interval: any;
-    if (isPlaying && playingId && playerRef.current) {
-      interval = setInterval(async () => {
-        try {
-          const elapsed_sec = await playerRef.current.getCurrentTime();
-          const duration_sec = await playerRef.current.getDuration();
-          if (elapsed_sec > 0) {
-            setPositionMs(elapsed_sec * 1000);
-            setDurationMs(duration_sec * 1000);
-          }
-        } catch(e) {}
-      }, 1000);
-    }
-    return () => clearInterval(interval);
-  }, [isPlaying, playingId]);
 
   const onPlaybackStatusUpdate = (status: any) => {
     if (status.isLoaded) {
@@ -291,16 +231,11 @@ export default function RootLayout() {
   };
 
   const togglePlay = async () => {
-    if (playingId) {
-      setIsPlaying(!isPlaying);
-    } else if (sound) {
-      if (isPlaying) {
-        await sound.pauseAsync();
-        setIsPlaying(false);
-      } else {
-        await sound.playAsync();
-        setIsPlaying(true);
-      }
+    if (!sound) return;
+    if (isPlaying) {
+      await sound.pauseAsync();
+    } else {
+      await sound.playAsync();
     }
   };
 
@@ -319,12 +254,7 @@ export default function RootLayout() {
   };
 
   const seekTo = async (millis: number) => {
-    if (playingId) {
-      if (playerRef.current) {
-        playerRef.current.seekTo(millis / 1000, true);
-      }
-      setPositionMs(millis);
-    } else if (sound) {
+    if (sound) {
       await sound.setPositionAsync(millis);
     }
   };
@@ -357,27 +287,6 @@ export default function RootLayout() {
           <Stack.Screen name="(tabs)" options={{ gestureEnabled: false }} />
           <Stack.Screen name="player" options={{ presentation: 'modal', gestureEnabled: true }} />
         </Stack>
-        <View style={{ position: 'absolute', bottom: 10, right: 10, width: 10, height: 10, opacity: 0.01 }} pointerEvents="none">
-          {playingId ? (
-            <YoutubeIframe
-              ref={playerRef}
-              height={1}
-              width={1}
-              videoId={playingId}
-              play={isPlaying}
-              onChangeState={onYoutubeStateChange}
-              webViewProps={{
-                allowsInlineMediaPlayback: true,
-                mediaPlaybackRequiresUserAction: false,
-              }}
-              initialPlayerParams={{
-                controls: false,
-                modestbranding: true,
-                preventFullScreen: true,
-              }}
-            />
-          ) : null}
-        </View>
       </PlaybackContext.Provider>
     </AuthContext.Provider>
   );

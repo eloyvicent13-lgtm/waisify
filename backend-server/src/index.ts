@@ -7,6 +7,7 @@ import youtubedl from 'youtube-dl-exec';
 import { initDatabase, getDb } from './database';
 import fs from 'fs';
 import path from 'path';
+import { Readable } from 'stream';
 
 dotenv.config();
 
@@ -328,79 +329,145 @@ async function resolveViaSavenow(youtubeId: string): Promise<string> {
   throw new Error('Savenow conversion timed out');
 }
 
-// 5. Stream: Resolve YouTube ID to direct audio stream URL
-app.get('/api/stream', async (req, res) => {
-  const { youtubeId } = req.query;
-  if (!youtubeId) {
-    return res.status(400).json({ error: 'youtubeId parameter is required' });
-  }
-
-  // 1. Try youtube-dl-exec first (Fastest, uses yt-dlp which bypasses bot blocks natively)
+// Resolves a YouTube ID to a direct upstream audio URL.
+// NOTE: URLs from step 1/3 are googlevideo.com links bound to the resolving
+// server's IP (YouTube's CDN rejects requests from a different IP than the
+// one that requested the URL) — callers that hand the URL to a remote client
+// MUST proxy the bytes (see /api/audio) rather than passing it through raw.
+async function resolveAudioStreamUrl(youtubeId: string): Promise<string | null> {
+  // 1. Try youtube-dl-exec first (fastest, uses yt-dlp which bypasses bot blocks natively)
   try {
     console.log(`[YouTube Stream] Resolving stream for video ID: "${youtubeId}" using youtube-dl-exec...`);
-    
-    const options: any = { getUrl: true, format: 'bestaudio' };
+
+    // iOS AVPlayer can't decode Opus/WebM — force an m4a/AAC audio track
+    const options: any = { getUrl: true, format: 'bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio' };
     const cookiesPath = path.resolve(process.cwd(), 'youtube.com_cookies.txt');
     if (fs.existsSync(cookiesPath)) {
       options.cookies = cookiesPath;
     }
-    
+
     const streamUrl = await youtubedl(`https://www.youtube.com/watch?v=${youtubeId}`, options);
-    
+
     if (streamUrl && typeof streamUrl === 'string') {
       console.log(`[YouTube Stream] Successfully resolved stream URL for video ID: "${youtubeId}"`);
-      return res.json({ streamUrl });
+      return streamUrl;
     }
     throw new Error('No audio format URL found in youtube-dl response');
   } catch (err: any) {
     console.warn(`[YouTube Stream] youtube-dl failed to resolve "${youtubeId}" (${err.message}). Falling back to Savenow...`);
   }
 
-  // 2. Try Savenow.to (Proxy fallback, takes ~20-30s if not cached)
+  // 2. Try Savenow.to (proxy fallback, takes ~20-30s if not cached)
   try {
     console.log(`[YouTube Stream] Resolving stream for video ID: "${youtubeId}" using Savenow API...`);
-    const streamUrl = await resolveViaSavenow(youtubeId as string);
+    const streamUrl = await resolveViaSavenow(youtubeId);
     if (streamUrl) {
       console.log(`[YouTube Stream] Successfully resolved stream URL via Savenow for "${youtubeId}"`);
-      return res.json({ streamUrl });
+      return streamUrl;
     }
   } catch (savenowErr: any) {
     console.warn(`[YouTube Stream] Savenow resolution failed for "${youtubeId}":`, savenowErr.message);
   }
 
-  // 3. Fallback to Piped Instances
+  // 3. Fallback to Piped instances
   console.log(`[YouTube Stream] Trying Piped API fallbacks...`);
-    
-    const pipedInstances = [
-      'https://pipedapi.lunar.icu',
-      'https://pipedapi.tokhmi.xyz',
-      'https://pipedapi.chg.gg',
-      'https://pipedapi.ox.0y.at',
-      'https://pipedapi.kavin.rocks'
-    ];
 
-    for (const inst of pipedInstances) {
-      try {
-        console.log(`[YouTube Stream] Fallback: trying Piped instance: ${inst}`);
-        // Query the Piped API endpoint directly (Pterodactyl DNS resolves this successfully)
-        const response = await fetch(`${inst}/streams/${youtubeId}`);
-        if (response.ok) {
-          const data = (await response.json()) as any;
-          if (data && data.audioStreams && data.audioStreams.length > 0) {
-            const streamUrl = data.audioStreams[0].url;
-            if (streamUrl) {
-              console.log(`[YouTube Stream] Success! Resolved stream URL via Piped instance: ${inst}`);
-              return res.json({ streamUrl });
-            }
+  const pipedInstances = [
+    'https://pipedapi.lunar.icu',
+    'https://pipedapi.tokhmi.xyz',
+    'https://pipedapi.chg.gg',
+    'https://pipedapi.ox.0y.at',
+    'https://pipedapi.kavin.rocks'
+  ];
+
+  for (const inst of pipedInstances) {
+    try {
+      console.log(`[YouTube Stream] Fallback: trying Piped instance: ${inst}`);
+      const response = await fetch(`${inst}/streams/${youtubeId}`);
+      if (response.ok) {
+        const data = (await response.json()) as any;
+        if (data && data.audioStreams && data.audioStreams.length > 0) {
+          // Prefer an m4a/AAC stream — iOS AVPlayer can't decode Opus/WebM
+          const m4aStream = data.audioStreams.find((s: any) => (s.mimeType || '').includes('mp4') || (s.codec || '').startsWith('mp4a'));
+          const streamUrl = (m4aStream || data.audioStreams[0]).url;
+          if (streamUrl) {
+            console.log(`[YouTube Stream] Success! Resolved stream URL via Piped instance: ${inst}`);
+            return streamUrl;
           }
         }
-      } catch (pipedErr: any) {
-        console.log(`[YouTube Stream] Piped instance ${inst} failed: ${pipedErr.message}`);
       }
+    } catch (pipedErr: any) {
+      console.log(`[YouTube Stream] Piped instance ${inst} failed: ${pipedErr.message}`);
+    }
+  }
+
+  console.error(`[YouTube Stream] All fallback systems failed for video ID: "${youtubeId}"`);
+  return null;
+}
+
+// 5. Stream: Resolve YouTube ID to a direct audio stream URL (debug/inspection use —
+// the app should prefer /api/audio, since this raw URL may be IP-locked to this server).
+app.get('/api/stream', async (req, res) => {
+  const { youtubeId } = req.query;
+  if (!youtubeId) {
+    return res.status(400).json({ error: 'youtubeId parameter is required' });
+  }
+
+  const streamUrl = await resolveAudioStreamUrl(youtubeId as string);
+  if (streamUrl) {
+    return res.json({ streamUrl });
+  }
+  res.status(500).json({ error: 'All streaming resolution methods failed' });
+});
+
+// 5b. Audio: Resolve + proxy the actual audio bytes to the client.
+// This is what the app should use for playback — it sidesteps YouTube's
+// IP-locked googlevideo URLs entirely (this server does both the resolve
+// AND the fetch, so the IPs always match) and supports Range requests so
+// expo-av can seek natively over plain HTTP instead of relying on a
+// YouTube iframe's seekTo().
+app.get('/api/audio', async (req, res) => {
+  const { youtubeId } = req.query;
+  if (!youtubeId) {
+    return res.status(400).json({ error: 'youtubeId parameter is required' });
+  }
+
+  try {
+    const streamUrl = await resolveAudioStreamUrl(youtubeId as string);
+    if (!streamUrl) {
+      return res.status(502).json({ error: 'All streaming resolution methods failed' });
     }
 
-    console.error(`[YouTube Stream] All fallback systems failed for video ID: "${youtubeId}"`);
-    res.status(500).json({ error: 'All streaming resolution methods failed' });
+    const upstreamHeaders: Record<string, string> = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    };
+    if (req.headers.range) {
+      upstreamHeaders['Range'] = req.headers.range as string;
+    }
+
+    const upstream = await fetch(streamUrl, { headers: upstreamHeaders });
+
+    if (!upstream.ok && upstream.status !== 206) {
+      console.error(`[Audio Proxy] Upstream fetch failed for "${youtubeId}": ${upstream.status}`);
+      return res.status(502).json({ error: `Upstream fetch failed with status ${upstream.status}` });
+    }
+
+    res.status(upstream.status);
+    res.setHeader('Content-Type', upstream.headers.get('content-type') || 'audio/mp4');
+    res.setHeader('Accept-Ranges', 'bytes');
+    const contentLength = upstream.headers.get('content-length');
+    const contentRange = upstream.headers.get('content-range');
+    if (contentLength) res.setHeader('Content-Length', contentLength);
+    if (contentRange) res.setHeader('Content-Range', contentRange);
+
+    if (!upstream.body) {
+      return res.end();
+    }
+    Readable.fromWeb(upstream.body as any).pipe(res);
+  } catch (err: any) {
+    console.error(`[Audio Proxy] Failed for "${youtubeId}":`, err.message);
+    res.status(500).json({ error: 'Audio proxy failed' });
+  }
 });
 
 
