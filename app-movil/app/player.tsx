@@ -11,6 +11,7 @@ import { isDownloaded, downloadTrack, deleteDownloadedTrack } from '../services/
 import GlassVisualizer from '../components/GlassVisualizer';
 
 const { width, height } = Dimensions.get('window');
+const API_BASE = 'http://149.202.84.78:8150';
 
 interface LyricLine {
   text: string;
@@ -32,6 +33,7 @@ export default function PlayerScreen() {
   const [downloading, setDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
   const [isOfflineTrack, setIsOfflineTrack] = useState(false);
+  const [waveform, setWaveform] = useState<number[] | null>(null);
 
   const scrollRef = useRef<ScrollView>(null);
   // Guards against a slow previous track's lyrics fetch resolving after a
@@ -69,6 +71,40 @@ export default function PlayerScreen() {
     loadLyrics(playback.currentTrack, requestId);
     checkDownloadStatus(playback.currentTrack.id);
   }, [playback?.currentTrack?.id]);
+
+  // Fetch the real amplitude waveform for the visualizer. It's only
+  // computed server-side once the track finishes caching, so poll a few
+  // times and give up quietly if it never shows up (visualizer falls back
+  // to its generic animation in that case).
+  useEffect(() => {
+    setWaveform(null);
+    const yId = playback?.currentTrack?.youtubeId;
+    if (!yId) return;
+
+    let cancelled = false;
+    let attempts = 0;
+
+    const poll = async () => {
+      if (cancelled) return;
+      attempts++;
+      try {
+        const res = await axios.get(`${API_BASE}/api/waveform?youtubeId=${yId}`, { timeout: 5000 });
+        if (cancelled) return;
+        if (res.data?.points) {
+          setWaveform(res.data.points);
+          return;
+        }
+      } catch {
+        // 202 (still computing) also lands here via axios's non-2xx rejection — just keep polling
+      }
+      if (attempts < 10) {
+        setTimeout(poll, 3000);
+      }
+    };
+    poll();
+
+    return () => { cancelled = true; };
+  }, [playback?.currentTrack?.youtubeId]);
 
   const checkDownloadStatus = async (trackId: string) => {
     const status = await isDownloaded(trackId);
@@ -433,7 +469,7 @@ export default function PlayerScreen() {
       )}
 
       {/* Floating Snappy Equalizer Visualizer */}
-      <GlassVisualizer isPlaying={isPlaying} />
+      <GlassVisualizer isPlaying={isPlaying} waveform={waveform} positionMs={positionMs} durationMs={durationMs} />
 
       <View style={styles.controllerPanel}>
         <View style={styles.progressRow}>

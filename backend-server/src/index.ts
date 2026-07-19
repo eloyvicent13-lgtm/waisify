@@ -8,6 +8,8 @@ import { initDatabase, getDb } from './database';
 import fs from 'fs';
 import path from 'path';
 import { Readable } from 'stream';
+import { spawn } from 'child_process';
+import ffmpegPath from 'ffmpeg-static';
 
 dotenv.config();
 
@@ -363,6 +365,70 @@ function getCachedAudioFile(youtubeId: string): { filePath: string; contentType:
   return null;
 }
 
+// Extracts a real amplitude envelope from a cached audio file — decodes to
+// raw mono PCM via ffmpeg, computes RMS loudness over fixed windows, and
+// downsamples to a fixed number of points (independent of track length) so
+// the client can index into it by playback percentage. Used to drive the
+// player's visualizer off the track's actual energy instead of a canned
+// animation loop.
+const WAVEFORM_POINTS = 300;
+async function computeWaveform(youtubeId: string, filePath: string): Promise<void> {
+  const waveformPath = path.join(AUDIO_CACHE_DIR, `${youtubeId}.waveform.json`);
+  if (fs.existsSync(waveformPath)) return;
+
+  const SAMPLE_RATE = 8000;
+  const WINDOW_SAMPLES = 800; // 100ms per window at 8kHz
+
+  await new Promise<void>((resolve) => {
+    const chunks: Buffer[] = [];
+    const proc = spawn(ffmpegPath as unknown as string, ['-i', filePath, '-f', 's16le', '-ac', '1', '-ar', String(SAMPLE_RATE), '-']);
+    proc.stdout.on('data', (d) => chunks.push(d));
+    proc.on('error', (e) => {
+      console.warn(`[Waveform] ffmpeg spawn failed for "${youtubeId}":`, e.message);
+      resolve();
+    });
+    proc.on('close', (code) => {
+      try {
+        if (code !== 0) {
+          console.warn(`[Waveform] ffmpeg exited ${code} for "${youtubeId}"`);
+          return resolve();
+        }
+        const buf = Buffer.concat(chunks);
+        const sampleCount = Math.floor(buf.length / 2);
+
+        const windows: number[] = [];
+        for (let i = 0; i + WINDOW_SAMPLES <= sampleCount; i += WINDOW_SAMPLES) {
+          let sumSq = 0;
+          for (let j = 0; j < WINDOW_SAMPLES; j++) {
+            const sample = buf.readInt16LE((i + j) * 2) / 32768;
+            sumSq += sample * sample;
+          }
+          windows.push(Math.sqrt(sumSq / WINDOW_SAMPLES));
+        }
+
+        if (windows.length === 0) {
+          console.warn(`[Waveform] No windows computed for "${youtubeId}" (file too short?)`);
+          return resolve();
+        }
+
+        const out: number[] = [];
+        for (let i = 0; i < WAVEFORM_POINTS; i++) {
+          const idx = Math.floor((i / WAVEFORM_POINTS) * windows.length);
+          out.push(windows[idx] || 0);
+        }
+        const max = Math.max(...out, 0.0001);
+        const normalized = out.map((v) => Math.round((v / max) * 100) / 100);
+
+        fs.writeFileSync(waveformPath, JSON.stringify(normalized));
+        console.log(`[Waveform] Computed for "${youtubeId}"`);
+      } catch (e: any) {
+        console.warn(`[Waveform] Processing failed for "${youtubeId}":`, e.message);
+      }
+      resolve();
+    });
+  });
+}
+
 // Starts (or joins) a background download of the full track to disk, tee-ing
 // the same network stream to `res` as it arrives so the first caller doesn't
 // wait for the download to finish before hearing anything. Only the request
@@ -411,6 +477,7 @@ function startAudioDownload(youtubeId: string, streamUrl: string, res?: any): Pr
           fs.writeFileSync(metaPath, JSON.stringify({ contentType }));
           console.log(`[Audio Cache] Cached "${youtubeId}" to disk in ${Date.now() - startedAt}ms`);
           resolve({ filePath: finalPath, contentType });
+          computeWaveform(youtubeId, finalPath).catch((e) => console.warn(`[Waveform] Failed for "${youtubeId}":`, e.message));
         } catch (e) {
           reject(e);
         }
@@ -607,6 +674,33 @@ app.post('/api/preload', async (req, res) => {
   })();
 });
 
+// 5d. Waveform: real amplitude envelope for the player's visualizer.
+// Only available once the track is cached (computed right after caching
+// finishes) — returns 202 while it's still pending so the client can fall
+// back to a generic animation instead of erroring.
+app.get('/api/waveform', async (req, res) => {
+  const { youtubeId } = req.query;
+  if (!youtubeId) {
+    return res.status(400).json({ error: 'youtubeId parameter is required' });
+  }
+  const id = youtubeId as string;
+
+  if (!getCachedAudioFile(id)) {
+    return res.status(202).json({ error: 'Audio not cached yet' });
+  }
+
+  const waveformPath = path.join(AUDIO_CACHE_DIR, `${id}.waveform.json`);
+  if (!fs.existsSync(waveformPath)) {
+    return res.status(202).json({ error: 'Waveform still computing' });
+  }
+
+  try {
+    const data = JSON.parse(fs.readFileSync(waveformPath, 'utf-8'));
+    res.json({ points: data });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // 6. Playlists: Get all playlists for logged user
 app.get('/api/playlists', authenticateToken, async (req: any, res) => {
