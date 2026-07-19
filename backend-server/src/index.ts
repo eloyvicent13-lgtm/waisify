@@ -329,6 +329,37 @@ async function resolveViaSavenow(youtubeId: string): Promise<string> {
   throw new Error('Savenow conversion timed out');
 }
 
+// Cache of resolved upstream URLs, keyed by youtubeId. A single track load
+// over HTTP triggers several requests (the initial load + subsequent Range
+// requests as the player buffers/seeks) — without this, every single one of
+// those would re-run the whole yt-dlp -> Savenow -> Piped chain from
+// scratch in parallel, each paying the full ~20-30s Savenow tax, so audio
+// would never arrive in time to actually start playing.
+const resolvedUrlCache = new Map<string, { url: string; expiresAt: number }>();
+const inFlightResolutions = new Map<string, Promise<string | null>>();
+const STREAM_CACHE_TTL_MS = 20 * 60 * 1000; // upstream URLs are typically valid for hours; 20min is a safe reuse window
+
+async function getCachedAudioStreamUrl(youtubeId: string): Promise<string | null> {
+  const cached = resolvedUrlCache.get(youtubeId);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.url;
+  }
+
+  let inFlight = inFlightResolutions.get(youtubeId);
+  if (!inFlight) {
+    inFlight = resolveAudioStreamUrl(youtubeId).finally(() => {
+      inFlightResolutions.delete(youtubeId);
+    });
+    inFlightResolutions.set(youtubeId, inFlight);
+  }
+
+  const url = await inFlight;
+  if (url) {
+    resolvedUrlCache.set(youtubeId, { url, expiresAt: Date.now() + STREAM_CACHE_TTL_MS });
+  }
+  return url;
+}
+
 // Resolves a YouTube ID to a direct upstream audio URL.
 // NOTE: URLs from step 1/3 are googlevideo.com links bound to the resolving
 // server's IP (YouTube's CDN rejects requests from a different IP than the
@@ -433,7 +464,8 @@ app.get('/api/audio', async (req, res) => {
   }
 
   try {
-    const streamUrl = await resolveAudioStreamUrl(youtubeId as string);
+    const id = youtubeId as string;
+    let streamUrl = await getCachedAudioStreamUrl(id);
     if (!streamUrl) {
       return res.status(502).json({ error: 'All streaming resolution methods failed' });
     }
@@ -445,10 +477,21 @@ app.get('/api/audio', async (req, res) => {
       upstreamHeaders['Range'] = req.headers.range as string;
     }
 
-    const upstream = await fetch(streamUrl, { headers: upstreamHeaders });
+    let upstream = await fetch(streamUrl, { headers: upstreamHeaders });
+
+    // Cached URL may have expired/been revoked upstream (403/404) — evict and re-resolve once.
+    if (upstream.status === 403 || upstream.status === 404) {
+      console.warn(`[Audio Proxy] Cached URL stale for "${id}" (status ${upstream.status}), re-resolving...`);
+      resolvedUrlCache.delete(id);
+      streamUrl = await getCachedAudioStreamUrl(id);
+      if (!streamUrl) {
+        return res.status(502).json({ error: 'All streaming resolution methods failed' });
+      }
+      upstream = await fetch(streamUrl, { headers: upstreamHeaders });
+    }
 
     if (!upstream.ok && upstream.status !== 206) {
-      console.error(`[Audio Proxy] Upstream fetch failed for "${youtubeId}": ${upstream.status}`);
+      console.error(`[Audio Proxy] Upstream fetch failed for "${id}": ${upstream.status}`);
       return res.status(502).json({ error: `Upstream fetch failed with status ${upstream.status}` });
     }
 
