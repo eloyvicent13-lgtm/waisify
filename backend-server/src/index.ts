@@ -731,6 +731,147 @@ app.delete('/api/playlists/:id/tracks/:trackId', authenticateToken, async (req: 
   }
 });
 
+interface ImportedTrack {
+  title: string;
+  artist: string;
+  duration: number;
+  thumbnail: string;
+  youtubeId?: string;
+}
+
+// Ported from the web client (src/renderer.ts importYouTubePlaylist) — reads
+// the public RSS feed YouTube exposes for any public playlist, no API key needed.
+async function importYouTubePlaylist(playlistId: string): Promise<{ name: string; tracks: ImportedTrack[] }> {
+  const url = `https://www.youtube.com/feeds/videos.xml?playlist_id=${playlistId}`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error('No se pudo acceder a la playlist de YouTube. Asegúrate de que sea pública y que el ID sea correcto.');
+  const xmlText = await response.text();
+
+  let playlistName = 'Imported YouTube Playlist';
+  const feedTitleMatch = xmlText.match(/<feed[^>]*>[\s\S]*?<title>([^<]+)<\/title>/i);
+  if (feedTitleMatch) {
+    playlistName = feedTitleMatch[1];
+  }
+
+  const tracks: ImportedTrack[] = [];
+  const entryRegex = /<entry>([\s\S]*?)<\/entry>/g;
+  let entryMatch;
+  while ((entryMatch = entryRegex.exec(xmlText)) !== null) {
+    const entryXml = entryMatch[1];
+
+    const idMatch = entryXml.match(/<yt:videoId>([^<]+)<\/yt:videoId>/i)
+                 || entryXml.match(/<id>yt:video:([^<]+)<\/id>/i);
+    const titleMatch = entryXml.match(/<title>([^<]+)<\/title>/i);
+    const authorMatch = entryXml.match(/<author>[\s\S]*?<name>([^<]+)<\/name>/i);
+
+    if (idMatch && titleMatch) {
+      const videoId = idMatch[1].trim();
+      const title = titleMatch[1].trim();
+      const artist = authorMatch ? authorMatch[1].trim() : 'Artista Desconocido';
+
+      tracks.push({
+        title,
+        artist,
+        duration: 180,
+        thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+        youtubeId: videoId,
+      });
+    }
+  }
+
+  if (tracks.length === 0) {
+    throw new Error('No se encontraron canciones en el canal RSS de la playlist de YouTube. ¿Es pública?');
+  }
+
+  return { name: playlistName, tracks };
+}
+
+// Reads Spotify's public embed page, which ships a __NEXT_DATA__ script tag
+// with the playlist's tracks, no Spotify auth needed. YouTube IDs are
+// resolved lazily at play time (same as any other Spotify-sourced track in
+// this app). The web client (src/renderer.ts) has an older version of this
+// that matches a `<script id="resource">` tag Spotify no longer serves —
+// this is the current page shape as of testing this endpoint.
+async function importSpotifyPlaylist(playlistId: string): Promise<{ name: string; tracks: ImportedTrack[] }> {
+  const url = `https://open.spotify.com/embed/playlist/${playlistId}`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error('No se pudo acceder a la playlist de Spotify. Asegúrate de que sea pública.');
+  const html = await response.text();
+
+  const match = html.match(/<script id="__NEXT_DATA__"[^>]*>([^<]+)<\/script>/);
+  if (!match) throw new Error('No se pudieron extraer los metadatos de la playlist de Spotify.');
+
+  let entity: any;
+  try {
+    const data = JSON.parse(match[1]);
+    entity = data.props?.pageProps?.state?.data?.entity;
+  } catch (e) {
+    console.error('Error parsing Spotify embed contents:', e);
+    throw new Error('Error al analizar los metadatos de la playlist de Spotify.');
+  }
+
+  if (!entity || !Array.isArray(entity.trackList)) {
+    throw new Error('No se pudieron extraer las canciones de la playlist de Spotify.');
+  }
+
+  const playlistName = entity.name || 'Imported Spotify Playlist';
+  const coverArt = entity.coverArt?.sources?.[0]?.url || '';
+
+  const tracks: ImportedTrack[] = entity.trackList
+    .filter((t: any) => t.title)
+    .map((t: any) => ({
+      title: t.title,
+      artist: t.subtitle || 'Artista Desconocido',
+      duration: Math.floor((t.duration || 180000) / 1000),
+      thumbnail: coverArt,
+    }));
+
+  return { name: playlistName, tracks };
+}
+
+// 12. Playlists: Import a public Spotify or YouTube playlist by URL
+app.post('/api/playlists/import', authenticateToken, async (req: any, res) => {
+  const { url } = req.body;
+  if (!url) {
+    return res.status(400).json({ error: 'url is required' });
+  }
+
+  try {
+    const spotifyMatch = url.match(/playlist\/([a-zA-Z0-9]+)/);
+    const youtubeMatch = url.match(/[?&]list=([a-zA-Z0-9_-]+)/);
+
+    let result: { name: string; tracks: ImportedTrack[] };
+    if (spotifyMatch) {
+      result = await importSpotifyPlaylist(spotifyMatch[1]);
+    } else if (youtubeMatch) {
+      result = await importYouTubePlaylist(youtubeMatch[1]);
+    } else {
+      return res.status(400).json({ error: 'Formato de enlace no reconocido. Debe ser una playlist de Spotify o YouTube.' });
+    }
+
+    if (!result.tracks || result.tracks.length === 0) {
+      return res.status(400).json({ error: 'La playlist no contiene canciones o es privada.' });
+    }
+
+    const db = getDb();
+    const playlistResult = await db.run('INSERT INTO playlists (user_id, name) VALUES (?, ?)', [req.user.id, result.name]);
+    const playlistId = playlistResult.lastID;
+
+    for (const track of result.tracks) {
+      await db.run(
+        `INSERT INTO playlist_tracks (playlist_id, title, artist, duration, thumbnail, youtube_id)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [playlistId, track.title, track.artist, track.duration, track.thumbnail || '', track.youtubeId || '']
+      );
+    }
+
+    res.status(201).json({ id: playlistId, name: result.name, trackCount: result.tracks.length });
+  } catch (err: any) {
+    console.error('[Playlist Import] Failed:', err.message);
+    res.status(500).json({ error: err.message || 'No se pudo importar la playlist.' });
+  }
+});
+
 // Start Server
 async function start() {
   await initDatabase();

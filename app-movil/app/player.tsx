@@ -147,8 +147,29 @@ export default function PlayerScreen() {
     return parsed;
   };
 
-  // LRCLib Fetcher
+  // Lyrics fetcher — mirrors the proven strategy from the web client
+  // (src/renderer.ts): YouTube's own captions first (exact match for this
+  // exact video, no fuzzy search risk), then LRCLib fuzzy search picking
+  // the closest-duration match. Playlist-saved tracks often carry messy
+  // metadata from YouTube Music (e.g. artist "Milo J - Topic"), which broke
+  // LRCLib's strict /api/get exact-match endpoint (400s) — that endpoint
+  // isn't used here at all anymore, same as the web client.
   const LYRICS_TIMEOUT_MS = 6000;
+  const cleanLyricsStr = (s: string) => (s || '')
+    .replace(/\(.*\)/g, '')
+    .replace(/\[.*\]/g, '')
+    .replace(/official video/gi, '')
+    .replace(/video oficial/gi, '')
+    .replace(/lyrics/gi, '')
+    .replace(/letra/gi, '')
+    .replace(/hd/gi, '')
+    .replace(/4k/gi, '')
+    .replace(/&/g, '')
+    .replace(/,/g, '')
+    .replace(/feat\.?/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
   const loadLyrics = async (track: any, requestId: number) => {
     const isStale = () => requestId !== lyricsRequestId.current;
     const reasons: string[] = [];
@@ -158,125 +179,18 @@ export default function PlayerScreen() {
     setLyricsDebugInfo(null);
     setActiveLineIndex(-1);
 
-    try {
-      let lrcData = null;
+    const rawArtist = (track.artist || '').replace(/-\s*Topic/gi, '').replace(/Topic/gi, '').trim();
+    const rawTitle = track.title || '';
 
-      // 1. Try exact match query
-      try {
-        const exactUrl = `https://lrclib.net/api/get?artist=${encodeURIComponent(track.artist)}&track=${encodeURIComponent(track.title)}`;
-        const exactRes = await axios.get(exactUrl, { timeout: LYRICS_TIMEOUT_MS });
-        lrcData = exactRes.data;
-      } catch (err: any) {
-        const reason = `exact:${err.response?.status ?? err.message}`;
-        reasons.push(reason);
-        console.log(`[Lyrics] LRCLib exact match failed (${err.response?.status ?? err.message}), trying fuzzy search...`);
-      }
-
-      if (isStale()) return;
-
-      // 2. Try fuzzy search query if exact match failed
-      if (!lrcData) {
-        const cleanTitle = track.title
-          .replace(/\((official|lyrics|video|mv|feat|with|ft\.|audio|remaster|remastered)\)/gi, '')
-          .replace(/\[(official|lyrics|video|mv|feat|with|ft\.|audio|remaster|remastered)\]/gi, '')
-          .trim();
-        
-        let queryTerm = cleanTitle + ' ' + track.artist;
-        
-        // Smart split if title contains a hyphen (standard YouTube "Artist - Title" format)
-        if (track.title.includes('-')) {
-          const parts = track.title.split('-');
-          const possibleArtist = parts[0].trim();
-          const possibleTitle = parts[1]
-            .replace(/\((official|lyrics|video|mv|feat|with|ft\.|audio|remaster|remastered)\)/gi, '')
-            .replace(/\[(official|lyrics|video|mv|feat|with|ft\.|audio|remaster|remastered)\]/gi, '')
-            .trim();
-          
-          queryTerm = `${possibleTitle} ${possibleArtist}`;
-        }
-
-        try {
-          const searchUrl = `https://lrclib.net/api/search?q=${encodeURIComponent(queryTerm)}`;
-          const searchRes = await axios.get(searchUrl, { timeout: LYRICS_TIMEOUT_MS });
-          const searchResults = searchRes.data || [];
-          lrcData = searchResults.find((item: any) => item.syncedLyrics || item.plainLyrics);
-        } catch (searchErr: any) {
-          reasons.push(`fuzzy:${searchErr.response?.status ?? searchErr.message}`);
-          console.log(`[Lyrics] Fuzzy search failed (${searchErr.response?.status ?? searchErr.message}), trying title-only search...`);
-        }
-      }
-
-      if (isStale()) return;
-
-      // 3. Try clean Title-only search + JS-side artist matching fallback
-      if (!lrcData) {
-        try {
-          let titleOnly = track.title;
-          if (track.title.includes('-')) {
-            const parts = track.title.split('-');
-            titleOnly = parts[1] || parts[0];
-          }
-          const cleanTitleOnly = titleOnly
-            .replace(/\((official|lyrics|video|mv|feat|with|ft\.|audio|remaster|remastered)\)/gi, '')
-            .replace(/\[(official|lyrics|video|mv|feat|with|ft\.|audio|remaster|remastered)\]/gi, '')
-            .trim();
-
-          const searchUrl = `https://lrclib.net/api/search?q=${encodeURIComponent(cleanTitleOnly)}`;
-          const searchRes = await axios.get(searchUrl, { timeout: LYRICS_TIMEOUT_MS });
-          const searchResults = searchRes.data || [];
-
-          lrcData = searchResults.find((item: any) => {
-            if (!item.syncedLyrics && !item.plainLyrics) return false;
-            const itemArtist = (item.artistName || item.artist || '').toLowerCase();
-            const trackArtist = (track.artist || '').toLowerCase();
-            return itemArtist.includes(trackArtist) || trackArtist.includes(itemArtist);
-          });
-        } catch (titleOnlyErr: any) {
-          reasons.push(`titleOnly:${titleOnlyErr.response?.status ?? titleOnlyErr.message}`);
-          console.log(`[Lyrics] Title-only search failed (${titleOnlyErr.response?.status ?? titleOnlyErr.message})`);
-        }
-      }
-
-      if (isStale()) return;
-
-      if (lrcData) {
-        if (lrcData.syncedLyrics) {
-          const parsed = parseLrc(lrcData.syncedLyrics);
-          if (parsed.length > 0) {
-            setLyrics(parsed);
-            setLoadingLyrics(false);
-            return;
-          }
-        } else if (lrcData.plainLyrics) {
-          const lines = lrcData.plainLyrics.split('\n')
-            .map((txt: string, idx: number) => ({
-              text: txt.trim(),
-              time: idx * 4000,
-              duration: 4000
-            }))
-            .filter((t: any) => t.text !== '');
-          setLyrics(lines);
-          setLoadingLyrics(false);
-          return;
-        }
-        reasons.push('lrcMatchHadNoLyrics');
-      } else {
-        reasons.push('noLrcMatch');
-      }
-    } catch (e: any) {
-      reasons.push(`chain:${e.message}`);
-      console.log(`[Lyrics] LRCLib search chain failed (${e.message}), checking YouTube timedtext fallback`);
-    }
-
-    if (isStale()) return;
-
-    // YouTube Subtitles fallback
+    // 1. YouTube's own subtitles/captions for this exact video
     try {
       let vId = track.youtubeId;
       if (!vId) {
-        const res = await axios.get(`http://149.202.84.78:8150/api/resolve?title=${encodeURIComponent(track.title)}&artist=${encodeURIComponent(track.artist)}`, { timeout: LYRICS_TIMEOUT_MS });
+        const res = await axios.get(`http://149.202.84.78:8150/api/resolve?title=${encodeURIComponent(rawTitle)}&artist=${encodeURIComponent(rawArtist)}`, { timeout: LYRICS_TIMEOUT_MS });
         vId = res.data.youtubeId;
       }
+
+      if (isStale()) return;
 
       if (vId) {
         const subListRes = await axios.get(`https://www.youtube.com/api/timedtext?v=${vId}&type=list`, { timeout: LYRICS_TIMEOUT_MS });
@@ -311,7 +225,70 @@ export default function PlayerScreen() {
       }
     } catch (e: any) {
       reasons.push(`timedtext:${e.response?.status ?? e.message}`);
-      console.log(`[Lyrics] YouTube TimedText failed (${e.response?.status ?? e.message}), loading simulator fallback`);
+      console.log(`[Lyrics] YouTube TimedText failed (${e.response?.status ?? e.message}), trying LRCLib...`);
+    }
+
+    if (isStale()) return;
+
+    // 2. LRCLib fuzzy search, picking whichever result's duration is closest to the track's
+    try {
+      let cleanArtist = cleanLyricsStr(rawArtist);
+      let cleanTitle = cleanLyricsStr(rawTitle);
+
+      // "Artist - Title" style raw titles (common for tracks saved from YouTube search)
+      if (rawTitle.includes(' - ')) {
+        const parts = rawTitle.split(' - ');
+        const part1 = cleanLyricsStr(parts[0]);
+        const part2 = cleanLyricsStr(parts.slice(1).join(' - '));
+        if (part1.toLowerCase().includes(rawArtist.toLowerCase()) || rawArtist.toLowerCase().includes(part1.toLowerCase())) {
+          cleanArtist = part1;
+          cleanTitle = part2;
+        } else {
+          cleanTitle = part1;
+          cleanArtist = part2;
+        }
+      }
+
+      const query = `${cleanArtist} ${cleanTitle}`.trim();
+      const searchUrl = `https://lrclib.net/api/search?q=${encodeURIComponent(query)}`;
+      const searchRes = await axios.get(searchUrl, { timeout: LYRICS_TIMEOUT_MS });
+      const results = (searchRes.data || []).filter((r: any) => r.syncedLyrics || r.plainLyrics);
+
+      if (isStale()) return;
+
+      if (results.length > 0) {
+        const targetDuration = track.duration || 0;
+        results.sort((a: any, b: any) =>
+          Math.abs((a.duration || 0) - targetDuration) - Math.abs((b.duration || 0) - targetDuration)
+        );
+        const match = results[0];
+
+        if (match.syncedLyrics) {
+          const parsed = parseLrc(match.syncedLyrics);
+          if (parsed.length > 0) {
+            setLyrics(parsed);
+            setLoadingLyrics(false);
+            return;
+          }
+        } else if (match.plainLyrics) {
+          const lines = match.plainLyrics.split('\n')
+            .map((txt: string, idx: number) => ({
+              text: txt.trim(),
+              time: idx * 4000,
+              duration: 4000
+            }))
+            .filter((t: any) => t.text !== '');
+          setLyrics(lines);
+          setLoadingLyrics(false);
+          return;
+        }
+        reasons.push('lrcMatchHadNoLyrics');
+      } else {
+        reasons.push('noLrcMatch');
+      }
+    } catch (e: any) {
+      reasons.push(`lrcSearch:${e.response?.status ?? e.message}`);
+      console.log(`[Lyrics] LRCLib search failed (${e.response?.status ?? e.message})`);
     }
 
     if (isStale()) return;
