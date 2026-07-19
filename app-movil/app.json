@@ -4,6 +4,7 @@
     "slug": "waisify-app-movil",
     "version": "1.0.0",
     "owner": "eloy_pv",
+    "icon": "./assets/images/icon.png",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "ios": {

@@ -23,6 +23,7 @@ export default function PlayerScreen() {
   const router = useRouter();
 
   const [lyrics, setLyrics] = useState<LyricLine[]>([]);
+  const [lyricsDebugInfo, setLyricsDebugInfo] = useState<string | null>(null);
   const [loadingLyrics, setLoadingLyrics] = useState(false);
   const [showLyrics, setShowLyrics] = useState(false);
   const [activeLineIndex, setActiveLineIndex] = useState(-1);
@@ -150,9 +151,11 @@ export default function PlayerScreen() {
   const LYRICS_TIMEOUT_MS = 6000;
   const loadLyrics = async (track: any, requestId: number) => {
     const isStale = () => requestId !== lyricsRequestId.current;
+    const reasons: string[] = [];
 
     setLoadingLyrics(true);
     setLyrics([]);
+    setLyricsDebugInfo(null);
     setActiveLineIndex(-1);
 
     try {
@@ -164,6 +167,8 @@ export default function PlayerScreen() {
         const exactRes = await axios.get(exactUrl, { timeout: LYRICS_TIMEOUT_MS });
         lrcData = exactRes.data;
       } catch (err: any) {
+        const reason = `exact:${err.response?.status ?? err.message}`;
+        reasons.push(reason);
         console.log(`[Lyrics] LRCLib exact match failed (${err.response?.status ?? err.message}), trying fuzzy search...`);
       }
 
@@ -196,6 +201,7 @@ export default function PlayerScreen() {
           const searchResults = searchRes.data || [];
           lrcData = searchResults.find((item: any) => item.syncedLyrics || item.plainLyrics);
         } catch (searchErr: any) {
+          reasons.push(`fuzzy:${searchErr.response?.status ?? searchErr.message}`);
           console.log(`[Lyrics] Fuzzy search failed (${searchErr.response?.status ?? searchErr.message}), trying title-only search...`);
         }
       }
@@ -226,6 +232,7 @@ export default function PlayerScreen() {
             return itemArtist.includes(trackArtist) || trackArtist.includes(itemArtist);
           });
         } catch (titleOnlyErr: any) {
+          reasons.push(`titleOnly:${titleOnlyErr.response?.status ?? titleOnlyErr.message}`);
           console.log(`[Lyrics] Title-only search failed (${titleOnlyErr.response?.status ?? titleOnlyErr.message})`);
         }
       }
@@ -252,8 +259,12 @@ export default function PlayerScreen() {
           setLoadingLyrics(false);
           return;
         }
+        reasons.push('lrcMatchHadNoLyrics');
+      } else {
+        reasons.push('noLrcMatch');
       }
     } catch (e: any) {
+      reasons.push(`chain:${e.message}`);
       console.log(`[Lyrics] LRCLib search chain failed (${e.message}), checking YouTube timedtext fallback`);
     }
 
@@ -294,12 +305,19 @@ export default function PlayerScreen() {
           setLoadingLyrics(false);
           return;
         }
+        reasons.push('timedtextEmpty');
+      } else {
+        reasons.push('noYoutubeId');
       }
     } catch (e: any) {
+      reasons.push(`timedtext:${e.response?.status ?? e.message}`);
       console.log(`[Lyrics] YouTube TimedText failed (${e.response?.status ?? e.message}), loading simulator fallback`);
     }
 
     if (isStale()) return;
+
+    console.log(`[Lyrics] Falling back to placeholder for "${track.title}" — ${reasons.join(' | ')}`);
+    setLyricsDebugInfo(reasons.join(' | '));
 
     const dummy: LyricLine[] = [
       { text: 'Bienvenidos a Waisify Mobile', time: 0, duration: 4000 },
@@ -405,10 +423,15 @@ export default function PlayerScreen() {
         </View>
       ) : (
         <View style={styles.lyricsContent}>
+          {lyricsDebugInfo ? (
+            <Text style={styles.lyricsDebugText} selectable>
+              (sin letras reales — {lyricsDebugInfo})
+            </Text>
+          ) : null}
           {loadingLyrics ? (
             <ActivityIndicator size="large" color={Colors.accentColor} style={styles.center} />
           ) : (
-            <ScrollView 
+            <ScrollView
               ref={scrollRef} 
               showsVerticalScrollIndicator={false}
               contentContainerStyle={styles.lyricsScroll}
@@ -582,6 +605,12 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: 24,
     paddingVertical: 12,
+  },
+  lyricsDebugText: {
+    fontSize: 10,
+    color: 'rgba(255, 255, 255, 0.35)',
+    textAlign: 'center',
+    marginBottom: 8,
   },
   lyricsScroll: {
     paddingTop: height * 0.15,
