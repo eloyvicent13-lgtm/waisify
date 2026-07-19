@@ -1,12 +1,41 @@
-import React, { createContext, useState, useEffect } from 'react';
+import React, { createContext, useState, useEffect, useRef } from 'react';
 import { Stack, useRouter, useSegments, useRootNavigationState } from 'expo-router';
-import { Audio } from 'expo-av';
+import TrackPlayer, {
+  Capability,
+  Event,
+  State,
+  useProgress,
+  useTrackPlayerEvents,
+  usePlaybackState,
+} from 'react-native-track-player';
 import axios from 'axios';
 import { setToken, Track } from '../services/api';
 import { getDownloadedTracks } from '../services/downloadService';
+import { setRemoteHandlers } from '../services/trackPlayerService';
 import { documentDirectory, readAsStringAsync, writeAsStringAsync, getInfoAsync } from 'expo-file-system/legacy';
 
 const API_BASE = 'http://149.202.84.78:8150';
+
+let playerSetupPromise: Promise<void> | null = null;
+function ensurePlayerSetup(): Promise<void> {
+  if (!playerSetupPromise) {
+    playerSetupPromise = (async () => {
+      await TrackPlayer.setupPlayer();
+      await TrackPlayer.updateOptions({
+        capabilities: [
+          Capability.Play,
+          Capability.Pause,
+          Capability.SkipToNext,
+          Capability.SkipToPrevious,
+          Capability.SeekTo,
+          Capability.Stop,
+        ],
+        compactCapabilities: [Capability.Play, Capability.Pause, Capability.SkipToNext, Capability.SkipToPrevious],
+      });
+    })();
+  }
+  return playerSetupPromise;
+}
 
 export const AuthContext = createContext<{
   token: string | null;
@@ -42,33 +71,24 @@ export default function RootLayout() {
   const [loadingSession, setLoadingSession] = useState(true);
 
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
   const [queue, setQueue] = useState<Track[]>([]);
   const [queueIndex, setQueueIndex] = useState(0);
-  const [sound, setSound] = useState<Audio.Sound | null>(null);
-  const [positionMs, setPositionMs] = useState(0);
-  const [durationMs, setDurationMs] = useState(0);
 
   const router = useRouter();
   const segments = useSegments();
   const navigationState = useRootNavigationState();
   const [isReady, setIsReady] = useState(false);
 
+  // Native truth for playback state / position / duration — no manual
+  // isPlaying flag to desync, no hardcoded duration fallback to overflow.
+  const playbackState = usePlaybackState();
+  const isPlaying = playbackState.state === State.Playing || playbackState.state === State.Buffering;
+  const progress = useProgress(500);
+  const positionMs = progress.position * 1000;
+  const durationMs = progress.duration * 1000;
+
   useEffect(() => {
-    async function setupAudio() {
-      try {
-        await Audio.setAudioModeAsync({
-          allowsRecordingIOS: false,
-          playsInSilentModeIOS: true,
-          staysActiveInBackground: true,
-          shouldDuckAndroid: true,
-          playThroughEarpieceAndroid: false,
-        });
-      } catch (err) {
-        console.warn('[Audio] Setup failed:', err);
-      }
-    }
-    setupAudio();
+    ensurePlayerSetup().catch((err) => console.warn('[TrackPlayer] Setup failed:', err));
   }, []);
 
   useEffect(() => {
@@ -134,9 +154,9 @@ export default function RootLayout() {
     setTokenState(null);
     setUsername(null);
     setUserId(null);
-    if (sound) {
-      await sound.unloadAsync();
-    }
+    try {
+      await TrackPlayer.reset();
+    } catch {}
 
     try {
       const sessionPath = (documentDirectory || '') + 'session.json';
@@ -169,16 +189,9 @@ export default function RootLayout() {
     setQueueIndex(index);
     setCurrentTrack(track);
 
-    if (sound) {
-      await sound.unloadAsync();
-      setSound(null);
-    }
-    
-    setIsPlaying(false);
-    setPositionMs(0);
-    setDurationMs(0);
-
     try {
+      await ensurePlayerSetup();
+
       const offlineTracks = await getDownloadedTracks();
       const offlineMatch = offlineTracks.find(t => t.id === track.id);
 
@@ -207,35 +220,25 @@ export default function RootLayout() {
         return;
       }
 
-      const { sound: newSound } = await Audio.Sound.createAsync(
-        { uri },
-        { shouldPlay: true, progressUpdateIntervalMillis: 500 },
-        onPlaybackStatusUpdate
-      );
-      setSound(newSound);
-      setIsPlaying(true);
+      await TrackPlayer.reset();
+      await TrackPlayer.add({
+        id: track.id,
+        url: uri,
+        title: track.title,
+        artist: track.artist,
+        artwork: track.thumbnail || undefined,
+      });
+      await TrackPlayer.play();
     } catch (e) {
       console.error('Failed to load track audio:', e);
     }
   };
 
-  const onPlaybackStatusUpdate = (status: any) => {
-    if (status.isLoaded) {
-      setPositionMs(status.positionMillis);
-      setDurationMs(status.durationMillis || 180000);
-      setIsPlaying(status.isPlaying);
-      if (status.didJustFinish) {
-        playNext();
-      }
-    }
-  };
-
   const togglePlay = async () => {
-    if (!sound) return;
     if (isPlaying) {
-      await sound.pauseAsync();
+      await TrackPlayer.pause();
     } else {
-      await sound.playAsync();
+      await TrackPlayer.play();
     }
   };
 
@@ -254,18 +257,32 @@ export default function RootLayout() {
   };
 
   const seekTo = async (millis: number) => {
-    if (sound) {
-      await sound.setPositionAsync(millis);
-    }
+    await TrackPlayer.seekTo(millis / 1000);
   };
 
+  // Refs so the queue-ended listener and the lock-screen remote-control
+  // handlers always call the *current* playNext/playPrev — both are
+  // registered once (empty dep effects) but must never close over a stale
+  // queue/queueIndex from whatever render they were created in.
+  const playNextRef = useRef(playNext);
+  const playPrevRef = useRef(playPrev);
   useEffect(() => {
-    return () => {
-      if (sound) {
-        sound.unloadAsync();
-      }
-    };
-  }, [sound]);
+    playNextRef.current = playNext;
+    playPrevRef.current = playPrev;
+  });
+
+  useEffect(() => {
+    setRemoteHandlers({
+      onNext: () => playNextRef.current(),
+      onPrevious: () => playPrevRef.current(),
+    });
+  }, []);
+
+  useTrackPlayerEvents([Event.PlaybackQueueEnded, Event.PlaybackActiveTrackChanged], (event) => {
+    if (event.type === Event.PlaybackQueueEnded) {
+      playNextRef.current();
+    }
+  });
 
   return (
     <AuthContext.Provider value={{ token, username, userId, displayName, avatarColor, login, logout, updateProfile }}>

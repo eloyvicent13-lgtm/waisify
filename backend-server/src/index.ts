@@ -369,7 +369,7 @@ function getCachedAudioFile(youtubeId: string): { filePath: string; contentType:
 // that actually triggers the download gets the live tee — a request that
 // arrives while a download is already in flight just waits for it to land on
 // disk and gets served from there (see the /api/audio handler below).
-function startAudioDownload(youtubeId: string, streamUrl: string, res: any): Promise<{ filePath: string; contentType: string }> {
+function startAudioDownload(youtubeId: string, streamUrl: string, res?: any): Promise<{ filePath: string; contentType: string }> {
   const promise = (async () => {
     const upstreamOrigin = new URL(streamUrl).origin;
     console.log(`[Audio Cache] Downloading + streaming "${youtubeId}"...`);
@@ -387,7 +387,7 @@ function startAudioDownload(youtubeId: string, streamUrl: string, res: any): Pro
     }
 
     const contentType = response.headers.get('content-type') || 'audio/mpeg';
-    res.setHeader('Content-Type', contentType);
+    if (res) res.setHeader('Content-Type', contentType);
 
     const tmpPath = path.join(AUDIO_CACHE_DIR, `${youtubeId}.tmp-${Date.now()}`);
     const finalPath = path.join(AUDIO_CACHE_DIR, `${youtubeId}.audio`);
@@ -395,7 +395,9 @@ function startAudioDownload(youtubeId: string, streamUrl: string, res: any): Pro
     const fileStream = fs.createWriteStream(tmpPath);
     const nodeStream = Readable.fromWeb(response.body as any);
 
-    res.on('error', () => { /* client disconnected — let the disk write continue so we still cache it */ });
+    if (res) {
+      res.on('error', () => { /* client disconnected — let the disk write continue so we still cache it */ });
+    }
 
     return await new Promise<{ filePath: string; contentType: string }>((resolve, reject) => {
       nodeStream.on('error', (e) => { fileStream.destroy(e); reject(e); });
@@ -413,8 +415,8 @@ function startAudioDownload(youtubeId: string, streamUrl: string, res: any): Pro
           reject(e);
         }
       });
-      nodeStream.pipe(res);
       nodeStream.pipe(fileStream);
+      if (res) nodeStream.pipe(res);
     });
   })().finally(() => audioDownloadInFlight.delete(youtubeId));
 
@@ -566,6 +568,43 @@ app.get('/api/audio', async (req, res) => {
       res.status(502).json({ error: err.message || 'Audio proxy failed' });
     }
   }
+});
+
+// 5c. Preload: cache a whole playlist's audio to disk ahead of time, so
+// playing it later skips the resolve wait entirely. Responds immediately
+// with how many tracks were queued; downloads run one at a time in the
+// background (sequential, not parallel, to avoid hammering yt-dlp/Savenow
+// with a burst of simultaneous requests for a big playlist).
+app.post('/api/preload', async (req, res) => {
+  const { youtubeIds } = req.body;
+  if (!Array.isArray(youtubeIds) || youtubeIds.length === 0) {
+    return res.status(400).json({ error: 'youtubeIds array is required' });
+  }
+
+  const ids: string[] = youtubeIds.filter((id: any) => typeof id === 'string' && id);
+  const alreadyCached = ids.filter((id) => getCachedAudioFile(id)).length;
+  const inProgress = ids.filter((id) => !getCachedAudioFile(id) && audioDownloadInFlight.has(id)).length;
+  const toQueue = ids.filter((id) => !getCachedAudioFile(id) && !audioDownloadInFlight.has(id));
+
+  res.json({ queued: toQueue.length, alreadyCached, inProgress });
+
+  (async () => {
+    console.log(`[Preload] Starting background preload of ${toQueue.length} track(s)`);
+    for (const id of toQueue) {
+      if (getCachedAudioFile(id) || audioDownloadInFlight.has(id)) continue;
+      try {
+        const streamUrl = await resolveAudioStreamUrl(id);
+        if (!streamUrl) {
+          console.error(`[Preload] Could not resolve "${id}"`);
+          continue;
+        }
+        await startAudioDownload(id, streamUrl);
+      } catch (e: any) {
+        console.error(`[Preload] Failed for "${id}":`, e.message);
+      }
+    }
+    console.log(`[Preload] Finished background preload batch`);
+  })();
 });
 
 

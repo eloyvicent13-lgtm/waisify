@@ -33,6 +33,9 @@ export default function PlayerScreen() {
   const [isOfflineTrack, setIsOfflineTrack] = useState(false);
 
   const scrollRef = useRef<ScrollView>(null);
+  // Guards against a slow previous track's lyrics fetch resolving after a
+  // newer track was already selected and clobbering its state.
+  const lyricsRequestId = useRef(0);
 
   // Sync lyrics lines selection based on time
   useEffect(() => {
@@ -61,7 +64,8 @@ export default function PlayerScreen() {
   // Load track parameters and check download status
   useEffect(() => {
     if (!playback?.currentTrack) return;
-    loadLyrics(playback.currentTrack);
+    const requestId = ++lyricsRequestId.current;
+    loadLyrics(playback.currentTrack, requestId);
     checkDownloadStatus(playback.currentTrack.id);
   }, [playback?.currentTrack?.id]);
 
@@ -143,7 +147,10 @@ export default function PlayerScreen() {
   };
 
   // LRCLib Fetcher
-  const loadLyrics = async (track: any) => {
+  const LYRICS_TIMEOUT_MS = 6000;
+  const loadLyrics = async (track: any, requestId: number) => {
+    const isStale = () => requestId !== lyricsRequestId.current;
+
     setLoadingLyrics(true);
     setLyrics([]);
     setActiveLineIndex(-1);
@@ -154,11 +161,13 @@ export default function PlayerScreen() {
       // 1. Try exact match query
       try {
         const exactUrl = `https://lrclib.net/api/get?artist=${encodeURIComponent(track.artist)}&track=${encodeURIComponent(track.title)}`;
-        const exactRes = await axios.get(exactUrl);
+        const exactRes = await axios.get(exactUrl, { timeout: LYRICS_TIMEOUT_MS });
         lrcData = exactRes.data;
-      } catch (err) {
-        console.log('[Lyrics] LRCLib exact match failed, trying fuzzy search...');
+      } catch (err: any) {
+        console.log(`[Lyrics] LRCLib exact match failed (${err.response?.status ?? err.message}), trying fuzzy search...`);
       }
+
+      if (isStale()) return;
 
       // 2. Try fuzzy search query if exact match failed
       if (!lrcData) {
@@ -183,13 +192,15 @@ export default function PlayerScreen() {
 
         try {
           const searchUrl = `https://lrclib.net/api/search?q=${encodeURIComponent(queryTerm)}`;
-          const searchRes = await axios.get(searchUrl);
+          const searchRes = await axios.get(searchUrl, { timeout: LYRICS_TIMEOUT_MS });
           const searchResults = searchRes.data || [];
           lrcData = searchResults.find((item: any) => item.syncedLyrics || item.plainLyrics);
-        } catch (searchErr) {
-          console.log('[Lyrics] Fuzzy search failed, trying title-only search...');
+        } catch (searchErr: any) {
+          console.log(`[Lyrics] Fuzzy search failed (${searchErr.response?.status ?? searchErr.message}), trying title-only search...`);
         }
       }
+
+      if (isStale()) return;
 
       // 3. Try clean Title-only search + JS-side artist matching fallback
       if (!lrcData) {
@@ -205,7 +216,7 @@ export default function PlayerScreen() {
             .trim();
 
           const searchUrl = `https://lrclib.net/api/search?q=${encodeURIComponent(cleanTitleOnly)}`;
-          const searchRes = await axios.get(searchUrl);
+          const searchRes = await axios.get(searchUrl, { timeout: LYRICS_TIMEOUT_MS });
           const searchResults = searchRes.data || [];
 
           lrcData = searchResults.find((item: any) => {
@@ -214,11 +225,13 @@ export default function PlayerScreen() {
             const trackArtist = (track.artist || '').toLowerCase();
             return itemArtist.includes(trackArtist) || trackArtist.includes(itemArtist);
           });
-        } catch (titleOnlyErr) {
-          console.log('[Lyrics] Title-only search failed');
+        } catch (titleOnlyErr: any) {
+          console.log(`[Lyrics] Title-only search failed (${titleOnlyErr.response?.status ?? titleOnlyErr.message})`);
         }
       }
-      
+
+      if (isStale()) return;
+
       if (lrcData) {
         if (lrcData.syncedLyrics) {
           const parsed = parseLrc(lrcData.syncedLyrics);
@@ -240,25 +253,27 @@ export default function PlayerScreen() {
           return;
         }
       }
-    } catch (e) {
-      console.log('[Lyrics] LRCLib search chain failed, checking YouTube timedtext fallback');
+    } catch (e: any) {
+      console.log(`[Lyrics] LRCLib search chain failed (${e.message}), checking YouTube timedtext fallback`);
     }
+
+    if (isStale()) return;
 
     // YouTube Subtitles fallback
     try {
       let vId = track.youtubeId;
       if (!vId) {
-        const res = await axios.get(`http://149.202.84.78:8150/api/resolve?title=${encodeURIComponent(track.title)}&artist=${encodeURIComponent(track.artist)}`);
+        const res = await axios.get(`http://149.202.84.78:8150/api/resolve?title=${encodeURIComponent(track.title)}&artist=${encodeURIComponent(track.artist)}`, { timeout: LYRICS_TIMEOUT_MS });
         vId = res.data.youtubeId;
       }
 
       if (vId) {
-        const subListRes = await axios.get(`https://www.youtube.com/api/timedtext?v=${vId}&type=list`);
+        const subListRes = await axios.get(`https://www.youtube.com/api/timedtext?v=${vId}&type=list`, { timeout: LYRICS_TIMEOUT_MS });
         const xmlText = subListRes.data;
         const langMatch = xmlText.match(/lang_code="([^"]+)"/);
         const langCode = langMatch ? langMatch[1] : 'es';
 
-        const subtitleRes = await axios.get(`https://www.youtube.com/api/timedtext?v=${vId}&lang=${langCode}&fmt=json3`);
+        const subtitleRes = await axios.get(`https://www.youtube.com/api/timedtext?v=${vId}&lang=${langCode}&fmt=json3`, { timeout: LYRICS_TIMEOUT_MS });
         const json = subtitleRes.data;
         const events = json.events || [];
 
@@ -280,9 +295,11 @@ export default function PlayerScreen() {
           return;
         }
       }
-    } catch (e) {
-      console.log('[Lyrics] YouTube TimedText failed, loading simulator fallback');
+    } catch (e: any) {
+      console.log(`[Lyrics] YouTube TimedText failed (${e.response?.status ?? e.message}), loading simulator fallback`);
     }
+
+    if (isStale()) return;
 
     const dummy: LyricLine[] = [
       { text: 'Bienvenidos a Waisify Mobile', time: 0, duration: 4000 },
@@ -308,7 +325,7 @@ export default function PlayerScreen() {
   }
 
   const { currentTrack, isPlaying, positionMs, durationMs } = playback;
-  const progressPct = durationMs > 0 ? (positionMs / durationMs) * 100 : 0;
+  const progressPct = durationMs > 0 ? Math.min(100, Math.max(0, (positionMs / durationMs) * 100)) : 0;
 
   const formatTime = (ms: number) => {
     const totalSecs = Math.floor(ms / 1000);

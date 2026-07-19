@@ -8,12 +8,15 @@ import Colors from '../constants/Colors';
 import axios from 'axios';
 import { Track } from '../services/api';
 
+const API_BASE = 'http://149.202.84.78:8150';
+
 export default function PlaylistDetailScreen() {
   const { id, name } = useLocalSearchParams();
   const router = useRouter();
 
   const [tracks, setTracks] = useState<Track[]>([]);
   const [loading, setLoading] = useState(false);
+  const [preloading, setPreloading] = useState(false);
 
   const auth = useContext(AuthContext);
   const playback = useContext(PlaybackContext);
@@ -22,7 +25,7 @@ export default function PlaylistDetailScreen() {
     if (!auth?.token || !id) return;
     setLoading(true);
     try {
-      const res = await axios.get(`http://149.202.84.78:8150/api/playlists/${id}/tracks`, {
+      const res = await axios.get(`${API_BASE}/api/playlists/${id}/tracks`, {
         headers: { Authorization: `Bearer ${auth.token}` }
       });
       // Convert database columns (youtube_id -> youtubeId)
@@ -55,12 +58,38 @@ export default function PlaylistDetailScreen() {
 
   const handleDeleteTrack = async (trackId: string) => {
     try {
-      await axios.delete(`http://149.202.84.78:8150/api/playlists/${id}/tracks/${trackId}`, {
+      await axios.delete(`${API_BASE}/api/playlists/${id}/tracks/${trackId}`, {
         headers: { Authorization: `Bearer ${auth?.token}` }
       });
       setTracks(tracks.filter((t) => t.id !== trackId));
     } catch (e) {
       Alert.alert('Error', 'No se pudo eliminar la canción.');
+    }
+  };
+
+  const handlePreloadPlaylist = async () => {
+    const youtubeIds = tracks.map((t) => t.youtubeId).filter((id): id is string => !!id);
+    if (youtubeIds.length === 0) {
+      Alert.alert('Nada que cargar', 'Esta playlist no tiene canciones con audio disponible todavía.');
+      return;
+    }
+
+    setPreloading(true);
+    try {
+      const res = await axios.post(`${API_BASE}/api/preload`, { youtubeIds });
+      const { queued, alreadyCached, inProgress } = res.data;
+      Alert.alert(
+        'Cargando en el servidor',
+        queued > 0
+          ? `Cacheando ${queued} canción${queued === 1 ? '' : 'es'} en segundo plano. Ya no vas a esperar la próxima vez que las toques.${alreadyCached > 0 ? `\n\n${alreadyCached} ya estaban listas.` : ''}`
+          : inProgress > 0
+          ? 'Ya se están cargando en el servidor, dales un momento.'
+          : 'Todas las canciones de esta playlist ya están cacheadas en el servidor.'
+      );
+    } catch (e) {
+      Alert.alert('Error', 'No se pudo iniciar la carga en el servidor.');
+    } finally {
+      setPreloading(false);
     }
   };
 
@@ -101,7 +130,16 @@ export default function PlaylistDetailScreen() {
           <Ionicons name="chevron-back" size={24} color={Colors.textMain} />
         </TouchableOpacity>
         <Text numberOfLines={1} style={styles.headerTitle}>{name || 'Playlist'}</Text>
-        <View style={{ width: 24 }} />
+        <TouchableOpacity onPress={handlePreloadPlaylist} disabled={preloading} style={styles.loadBtn}>
+          {preloading ? (
+            <ActivityIndicator size="small" color={Colors.accentColor} />
+          ) : (
+            <>
+              <Ionicons name="cloud-download-outline" size={16} color={Colors.textMain} />
+              <Text style={styles.loadBtnText}>Cargar</Text>
+            </>
+          )}
+        </TouchableOpacity>
       </View>
 
       {loading ? (
@@ -139,6 +177,22 @@ const styles = StyleSheet.create({
   },
   backBtn: {
     padding: 4,
+  },
+  loadBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    minWidth: 40,
+    justifyContent: 'center',
+  },
+  loadBtnText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.textMain,
   },
   headerTitle: {
     fontSize: 20,
