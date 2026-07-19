@@ -470,14 +470,35 @@ app.get('/api/audio', async (req, res) => {
       return res.status(502).json({ error: 'All streaming resolution methods failed' });
     }
 
+    const upstreamOrigin = new URL(streamUrl).origin;
     const upstreamHeaders: Record<string, string> = {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Referer': upstreamOrigin + '/',
+      'Origin': upstreamOrigin,
     };
     if (req.headers.range) {
       upstreamHeaders['Range'] = req.headers.range as string;
     }
 
-    let upstream = await fetch(streamUrl, { headers: upstreamHeaders });
+    const fetchUpstream = async (url: string) => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 20000);
+      const startedAt = Date.now();
+      console.log(`[Audio Proxy] Fetching upstream bytes for "${id}"...`);
+      try {
+        const r = await fetch(url, { headers: upstreamHeaders, signal: controller.signal });
+        console.log(`[Audio Proxy] Upstream responded ${r.status} for "${id}" in ${Date.now() - startedAt}ms`);
+        return r;
+      } catch (fetchErr: any) {
+        const reason = fetchErr.name === 'AbortError' ? 'timed out after 20s' : fetchErr.message;
+        console.error(`[Audio Proxy] Upstream fetch errored for "${id}" after ${Date.now() - startedAt}ms: ${reason}`);
+        throw fetchErr;
+      } finally {
+        clearTimeout(timeout);
+      }
+    };
+
+    let upstream = await fetchUpstream(streamUrl);
 
     // Cached URL may have expired/been revoked upstream (403/404) — evict and re-resolve once.
     if (upstream.status === 403 || upstream.status === 404) {
@@ -487,7 +508,7 @@ app.get('/api/audio', async (req, res) => {
       if (!streamUrl) {
         return res.status(502).json({ error: 'All streaming resolution methods failed' });
       }
-      upstream = await fetch(streamUrl, { headers: upstreamHeaders });
+      upstream = await fetchUpstream(streamUrl);
     }
 
     if (!upstream.ok && upstream.status !== 206) {
