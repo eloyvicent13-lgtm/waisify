@@ -8,6 +8,11 @@ backend-server/node_modules/
 .env.local
 .env.*.local
 
+# Backend runtime data (never commit — sensitive / regenerated / large)
+backend-server/youtube.com_cookies.txt
+backend-server/audio-cache/
+backend-server/database.db
+
 # Expo directories
 app-movil/.expo/
 app-movil/.eas/

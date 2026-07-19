@@ -329,35 +329,97 @@ async function resolveViaSavenow(youtubeId: string): Promise<string> {
   throw new Error('Savenow conversion timed out');
 }
 
-// Cache of resolved upstream URLs, keyed by youtubeId. A single track load
-// over HTTP triggers several requests (the initial load + subsequent Range
-// requests as the player buffers/seeks) — without this, every single one of
-// those would re-run the whole yt-dlp -> Savenow -> Piped chain from
-// scratch in parallel, each paying the full ~20-30s Savenow tax, so audio
-// would never arrive in time to actually start playing.
-const resolvedUrlCache = new Map<string, { url: string; expiresAt: number }>();
-const inFlightResolutions = new Map<string, Promise<string | null>>();
-const STREAM_CACHE_TTL_MS = 20 * 60 * 1000; // upstream URLs are typically valid for hours; 20min is a safe reuse window
+// Local disk cache of fully-downloaded audio, keyed by youtubeId.
+// Several problems forced this instead of proxying/re-fetching per request:
+//  - A single track load triggers many HTTP requests (initial + Range
+//    requests as the player buffers/seeks). Re-running the whole
+//    yt-dlp -> Savenow -> Piped chain per request meant parallel ~20-30s
+//    Savenow conversions that never all finished in time.
+//  - Savenow's CDN doesn't honor Range requests (always answers 200 with
+//    the full file, never 206), so every "chunk" request downloaded the
+//    entire track again from scratch.
+// Downloading once to disk and serving that file (which DOES support Range,
+// via res.sendFile) fixes both: first play pays the resolve+download cost
+// once, everything after — including going back to a previously played
+// track — reads instantly from disk.
+const AUDIO_CACHE_DIR = path.resolve(process.cwd(), 'audio-cache');
+if (!fs.existsSync(AUDIO_CACHE_DIR)) {
+  fs.mkdirSync(AUDIO_CACHE_DIR, { recursive: true });
+}
 
-async function getCachedAudioStreamUrl(youtubeId: string): Promise<string | null> {
-  const cached = resolvedUrlCache.get(youtubeId);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.url;
+const audioDownloadInFlight = new Map<string, Promise<{ filePath: string; contentType: string }>>();
+
+function getCachedAudioFile(youtubeId: string): { filePath: string; contentType: string } | null {
+  const metaPath = path.join(AUDIO_CACHE_DIR, `${youtubeId}.json`);
+  const filePath = path.join(AUDIO_CACHE_DIR, `${youtubeId}.audio`);
+  if (fs.existsSync(metaPath) && fs.existsSync(filePath)) {
+    try {
+      const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+      return { filePath, contentType: meta.contentType || 'audio/mpeg' };
+    } catch {
+      return null;
+    }
   }
+  return null;
+}
 
-  let inFlight = inFlightResolutions.get(youtubeId);
-  if (!inFlight) {
-    inFlight = resolveAudioStreamUrl(youtubeId).finally(() => {
-      inFlightResolutions.delete(youtubeId);
+// Starts (or joins) a background download of the full track to disk, tee-ing
+// the same network stream to `res` as it arrives so the first caller doesn't
+// wait for the download to finish before hearing anything. Only the request
+// that actually triggers the download gets the live tee — a request that
+// arrives while a download is already in flight just waits for it to land on
+// disk and gets served from there (see the /api/audio handler below).
+function startAudioDownload(youtubeId: string, streamUrl: string, res: any): Promise<{ filePath: string; contentType: string }> {
+  const promise = (async () => {
+    const upstreamOrigin = new URL(streamUrl).origin;
+    console.log(`[Audio Cache] Downloading + streaming "${youtubeId}"...`);
+    const startedAt = Date.now();
+
+    const response = await fetch(streamUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': upstreamOrigin + '/',
+        'Origin': upstreamOrigin,
+      },
     });
-    inFlightResolutions.set(youtubeId, inFlight);
-  }
+    if (!response.ok || !response.body) {
+      throw new Error(`Download failed with status ${response.status}`);
+    }
 
-  const url = await inFlight;
-  if (url) {
-    resolvedUrlCache.set(youtubeId, { url, expiresAt: Date.now() + STREAM_CACHE_TTL_MS });
-  }
-  return url;
+    const contentType = response.headers.get('content-type') || 'audio/mpeg';
+    res.setHeader('Content-Type', contentType);
+
+    const tmpPath = path.join(AUDIO_CACHE_DIR, `${youtubeId}.tmp-${Date.now()}`);
+    const finalPath = path.join(AUDIO_CACHE_DIR, `${youtubeId}.audio`);
+    const metaPath = path.join(AUDIO_CACHE_DIR, `${youtubeId}.json`);
+    const fileStream = fs.createWriteStream(tmpPath);
+    const nodeStream = Readable.fromWeb(response.body as any);
+
+    res.on('error', () => { /* client disconnected — let the disk write continue so we still cache it */ });
+
+    return await new Promise<{ filePath: string; contentType: string }>((resolve, reject) => {
+      nodeStream.on('error', (e) => { fileStream.destroy(e); reject(e); });
+      fileStream.on('error', (e) => {
+        try { fs.unlinkSync(tmpPath); } catch {}
+        reject(e);
+      });
+      fileStream.on('finish', () => {
+        try {
+          fs.renameSync(tmpPath, finalPath);
+          fs.writeFileSync(metaPath, JSON.stringify({ contentType }));
+          console.log(`[Audio Cache] Cached "${youtubeId}" to disk in ${Date.now() - startedAt}ms`);
+          resolve({ filePath: finalPath, contentType });
+        } catch (e) {
+          reject(e);
+        }
+      });
+      nodeStream.pipe(res);
+      nodeStream.pipe(fileStream);
+    });
+  })().finally(() => audioDownloadInFlight.delete(youtubeId));
+
+  audioDownloadInFlight.set(youtubeId, promise);
+  return promise;
 }
 
 // Resolves a YouTube ID to a direct upstream audio URL.
@@ -463,74 +525,46 @@ app.get('/api/audio', async (req, res) => {
     return res.status(400).json({ error: 'youtubeId parameter is required' });
   }
 
+  const id = youtubeId as string;
+
+  const serveFromDisk = (filePath: string, contentType: string) => {
+    res.setHeader('Content-Type', contentType);
+    res.sendFile(filePath, (err) => {
+      if (err && !res.headersSent) {
+        console.error(`[Audio Proxy] sendFile failed for "${id}":`, err.message);
+      }
+    });
+  };
+
   try {
-    const id = youtubeId as string;
-    let streamUrl = await getCachedAudioStreamUrl(id);
+    const cached = getCachedAudioFile(id);
+    if (cached) {
+      return serveFromDisk(cached.filePath, cached.contentType);
+    }
+
+    // A download for this track is already streaming to a previous
+    // requester (e.g. a Range request that arrived while it was in
+    // flight) — wait for it to land on disk rather than starting a
+    // second parallel download, then serve the finished file.
+    const alreadyDownloading = audioDownloadInFlight.get(id);
+    if (alreadyDownloading) {
+      const { filePath, contentType } = await alreadyDownloading;
+      return serveFromDisk(filePath, contentType);
+    }
+
+    const streamUrl = await resolveAudioStreamUrl(id);
     if (!streamUrl) {
       return res.status(502).json({ error: 'All streaming resolution methods failed' });
     }
 
-    const upstreamOrigin = new URL(streamUrl).origin;
-    const upstreamHeaders: Record<string, string> = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Referer': upstreamOrigin + '/',
-      'Origin': upstreamOrigin,
-    };
-    if (req.headers.range) {
-      upstreamHeaders['Range'] = req.headers.range as string;
-    }
-
-    const fetchUpstream = async (url: string) => {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 20000);
-      const startedAt = Date.now();
-      console.log(`[Audio Proxy] Fetching upstream bytes for "${id}"...`);
-      try {
-        const r = await fetch(url, { headers: upstreamHeaders, signal: controller.signal });
-        console.log(`[Audio Proxy] Upstream responded ${r.status} for "${id}" in ${Date.now() - startedAt}ms`);
-        return r;
-      } catch (fetchErr: any) {
-        const reason = fetchErr.name === 'AbortError' ? 'timed out after 20s' : fetchErr.message;
-        console.error(`[Audio Proxy] Upstream fetch errored for "${id}" after ${Date.now() - startedAt}ms: ${reason}`);
-        throw fetchErr;
-      } finally {
-        clearTimeout(timeout);
-      }
-    };
-
-    let upstream = await fetchUpstream(streamUrl);
-
-    // Cached URL may have expired/been revoked upstream (403/404) — evict and re-resolve once.
-    if (upstream.status === 403 || upstream.status === 404) {
-      console.warn(`[Audio Proxy] Cached URL stale for "${id}" (status ${upstream.status}), re-resolving...`);
-      resolvedUrlCache.delete(id);
-      streamUrl = await getCachedAudioStreamUrl(id);
-      if (!streamUrl) {
-        return res.status(502).json({ error: 'All streaming resolution methods failed' });
-      }
-      upstream = await fetchUpstream(streamUrl);
-    }
-
-    if (!upstream.ok && upstream.status !== 206) {
-      console.error(`[Audio Proxy] Upstream fetch failed for "${id}": ${upstream.status}`);
-      return res.status(502).json({ error: `Upstream fetch failed with status ${upstream.status}` });
-    }
-
-    res.status(upstream.status);
-    res.setHeader('Content-Type', upstream.headers.get('content-type') || 'audio/mp4');
-    res.setHeader('Accept-Ranges', 'bytes');
-    const contentLength = upstream.headers.get('content-length');
-    const contentRange = upstream.headers.get('content-range');
-    if (contentLength) res.setHeader('Content-Length', contentLength);
-    if (contentRange) res.setHeader('Content-Range', contentRange);
-
-    if (!upstream.body) {
-      return res.end();
-    }
-    Readable.fromWeb(upstream.body as any).pipe(res);
+    // Streams live to `res` while simultaneously writing to disk for next time.
+    // nodeStream.pipe(res) ends the response itself once the source ends.
+    await startAudioDownload(id, streamUrl, res);
   } catch (err: any) {
-    console.error(`[Audio Proxy] Failed for "${youtubeId}":`, err.message);
-    res.status(500).json({ error: 'Audio proxy failed' });
+    console.error(`[Audio Proxy] Failed for "${id}":`, err.message);
+    if (!res.headersSent) {
+      res.status(502).json({ error: err.message || 'Audio proxy failed' });
+    }
   }
 });
 
